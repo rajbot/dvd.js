@@ -14,6 +14,8 @@ const MAX_EMPTY_CELLS = 64;
 const ACTION_FLASH = 150; // ms a button shows its "action" colours
 const SKIP = 10; // seconds for the arrow keys
 const AUDIO_DRIFT = 0.2; // seconds a separate audio track may be off the video
+const AUDIO_WAIT = 3; // let the video catch up when the audio is ahead by less than this
+const AUDIO_LEAD_MAX = 2; // most a seek of the audio track aims ahead of the video
 const SUBTITLE_MAX = 20; // seconds a subtitle with no end time stays up
 
 function el(tag, className, text) {
@@ -63,7 +65,11 @@ export class DvdPlayer {
     this.tracks = { audio: [], subs: [] }; // of the title being played
     this.audioTrack = null; // the one being heard
     this.altUrl = null; // its file, when it isn't the mp4's own audio
-    this.subTrack = null; // the subtitle track being shown
+    this.failedAudio = new Set(); // urls of audio tracks that wouldn't play
+    this.altLead = 0; // how long the last seek of the audio track took, in seconds
+    this.altSeekAt = 0;
+    this.subTrack = null; // the subtitle track the viewer switched on
+    this.subStream = null; // { id, forcedOnly } of the subtitles being drawn
     this.subs = null; // its subpicture units, once loaded
     this.menus = '';
     this.build(container);
@@ -95,6 +101,11 @@ export class DvdPlayer {
     this.note.hidden = true;
     this.alt = el('audio'); // plays audio tracks the mp4 doesn't have
     this.alt.preload = 'auto';
+    this.alt.addEventListener('error', () => this.audioFailed());
+    this.alt.addEventListener('seeked', () => {
+      if (this.altSeekAt) this.altLead = Math.min(AUDIO_LEAD_MAX, (performance.now() - this.altSeekAt) / 1000);
+      this.altSeekAt = 0;
+    });
     this.stage.append(this.canvas, this.note, this.banner, this.alt);
 
     const button = (label, title, onClick) => {
@@ -267,7 +278,7 @@ export class DvdPlayer {
     this.flash = null;
     this.canvas.height = set.video.format === 'PAL' ? 576 : 480;
     this.stage.style.setProperty('--dvd-aspect', set.video.aspect === '16:9' ? '16 / 9' : '4 / 3');
-    this.drawn = '';
+    this.drawn = null;
     let offset = step.resumeTime || 0;
     let index = 0;
     while (index + 1 < segments.length && offset >= segments[index].to - segments[index].from) {
@@ -352,7 +363,7 @@ export class DvdPlayer {
     if (this.video) this.video.classList.remove('dvd-active');
     this.video = video;
     video.classList.add('dvd-active');
-    this.drawn = '';
+    this.drawn = null;
   }
 
   get current() {
@@ -486,22 +497,31 @@ export class DvdPlayer {
     const seg = this.segments[this.segment];
     this.tracks = this.inTitle && seg ? this.disc.tracks(this.step, seg.file) : { audio: [], subs: [] };
     const { audio, subs } = this.tracks;
+    for (const track of audio) {
+      if (track.url && this.failedAudio.has(track.url)) track.available = false;
+    }
     // What the disc or the viewer chose, else the first one there is a file for.
     this.audioTrack = audio.find((t) => t.n === this.vm.audioTrack && t.available) || audio.find((t) => t.available) || null;
     const url = (this.audioTrack && this.audioTrack.url) || null;
     if (url !== this.altUrl) {
       this.altUrl = url;
+      this.altSeekAt = 0;
       this.alt.pause();
       if (url) this.alt.src = url;
       else this.alt.removeAttribute('src');
       this.alt.load();
     }
     this.subTrack = subs.find((t) => t.n === this.vm.subtitleTrack && t.available) || null;
+    // With subtitles off a player still shows the subtitles a disc forces on
+    // (signs, foreign dialogue), from the stream that would otherwise be shown.
+    const fallback = subs.find((t) => t.n === this.vm.subtitleStream && t.available) || subs.find((t) => t.available);
+    const shown = this.subTrack || fallback;
+    this.subStream = shown ? { id: shown.id, forcedOnly: !this.subTrack } : null;
     this.subs = null;
-    this.drawn = '';
-    if (this.subTrack) {
+    this.drawn = null;
+    if (this.subStream) {
       const { file } = seg;
-      const { id } = this.subTrack;
+      const stream = this.subStream;
       file.subs ??= fetch(file.extras.subsUrl)
         .then((res) => (res.ok ? res.arrayBuffer() : Promise.reject(new Error(`${res.status} for ${res.url}`))))
         .then((buf) => parseSubtitles(new Uint8Array(buf)))
@@ -511,7 +531,7 @@ export class DvdPlayer {
         });
       file.subs.then((streams) => {
         const now = this.segments[this.segment];
-        if (now && now.file === file && this.subTrack && this.subTrack.id === id) this.subs = streams.get(id) || [];
+        if (now && now.file === file && this.subStream === stream) this.subs = streams.get(stream.id) || [];
       });
     }
     this.fillPickers();
@@ -607,20 +627,42 @@ export class DvdPlayer {
     }
   }
 
+  // The separate audio track can't be played: go back to a track that can,
+  // and say so, rather than play the title in silence.
+  audioFailed() {
+    const url = this.altUrl;
+    if (!url || this.failedAudio.has(url)) return;
+    this.failedAudio.add(url);
+    const name = this.audioTrack ? this.audioTrack.label : 'That audio track';
+    this.applyTracks();
+    this.notice(`${name} could not be played${this.audioTrack ? `, so this is ${this.audioTrack.label}` : ''}.`);
+  }
+
   // Keep the separate audio track in step with the video.
   syncAudio() {
     const video = this.current;
     const alt = this.alt;
     if (!this.altUrl || !video) return;
     const playing = !video.paused && !video.seeking && video.readyState >= 3;
-    if (!alt.seeking && Math.abs(alt.currentTime - video.currentTime) > AUDIO_DRIFT) alt.currentTime = video.currentTime;
-    if (playing && alt.paused) alt.play().catch(() => {});
-    if (!playing && !alt.paused) alt.pause();
+    const ahead = alt.currentTime - video.currentTime;
+    // A little ahead: wait for the video instead of seeking again.
+    const waiting = playing && !alt.seeking && ahead > AUDIO_DRIFT && ahead < AUDIO_WAIT;
+    if (!alt.seeking && !waiting && Math.abs(ahead) > AUDIO_DRIFT) {
+      // Aim ahead by as long as the last seek took, so that it lands in step.
+      this.altSeekAt = performance.now();
+      alt.currentTime = video.currentTime + (playing ? this.altLead : 0);
+    }
+    if (playing && !waiting && alt.paused) {
+      alt.play().catch((err) => {
+        if (err.name !== 'AbortError') this.audioFailed();
+      });
+    }
+    if ((!playing || waiting) && !alt.paused) alt.pause();
   }
 
   // The subtitle to show now, or null.
   subtitleAt() {
-    if (!this.subs || !this.video || this.incoming) return null;
+    if (!this.subs || !this.subStream || !this.video || this.incoming) return null;
     const time = this.video.currentTime;
     let found = -1;
     for (let lo = 0, hi = this.subs.length - 1; lo <= hi; ) {
@@ -636,7 +678,7 @@ export class DvdPlayer {
     const unit = this.subs[found];
     unit.spu ??= decodeSpu(unit.data);
     const { spu } = unit;
-    if (!spu.pixels) return null;
+    if (!spu.pixels || (this.subStream.forcedOnly && !spu.forced)) return null;
     const start = unit.time + spu.startDelay / 90000;
     const stop = unit.time + (spu.stopDelay === null ? SUBTITLE_MAX : spu.stopDelay / 90000);
     return time >= start && time < stop ? unit : null;
@@ -712,7 +754,7 @@ export class DvdPlayer {
     const subtitle = state ? null : this.subtitleAt();
     const n = state ? this.vm.highlightedButton : 0;
     const mode = this.flash === n ? 'action' : 'select';
-    let key = subtitle ? `subtitle/${this.subTrack.id}/${subtitle.time}` : '';
+    let key = subtitle ? `subtitle/${this.subStream.id}/${subtitle.time}` : '';
     if (state) key = `${this.step.pgcN}/${this.step.cellN}/${state.hli.startPtm}/${n}/${mode}/${state.spu ? state.spu.pixels.length : 0}`;
     if (key === this.drawn) return;
     this.drawn = key;

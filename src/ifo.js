@@ -55,6 +55,14 @@ function parseAudioAttr(dv, off) {
   };
 }
 
+const AUDIO_STREAM_BASE = { ac3: 0x80, dts: 0x88, lpcm: 0xa0, mpeg1: 0xc0, mpeg2ext: 0xc0 };
+
+// Stream id of an audio track in the VOB: the base for its format plus the
+// stream number from the PGC's audio control word.
+export function audioStreamId(attr, control) {
+  return (AUDIO_STREAM_BASE[attr.format] ?? 0x80) + ((control >> 8) & 7);
+}
+
 function parseSubpAttr(dv, off) {
   const b0 = dv.getUint8(off);
   const lang = b0 & 3 ? String.fromCharCode(dv.getUint8(off + 2), dv.getUint8(off + 3)) : '';

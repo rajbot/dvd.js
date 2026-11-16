@@ -53,6 +53,7 @@ it with `&mp4item=`. The disc's own item is still searched first.
 
 An item can hold several discs. Pick one with `&iso=`, and keep each disc's
 mp4s in a directory named after its image (`Disc 2.iso` -> `Disc 2/VTS_01_1.mp4`).
+A disc never uses files from another disc's directory.
 
 ### Audio tracks and subtitles
 
@@ -64,15 +65,19 @@ subtitles are pictures, so both need extra files next to a title VOB's mp4.
 
 | File | |
 | --- | --- |
-| `VTS_01_1.mp4` | video, plus the disc's first audio track |
+| `VTS_01_1.mp4` | video, plus the disc's first audio track; its `comment` tag (`dvd.js audio=80`) names that stream |
 | `VTS_01_1.audio-a1.m4a` | each further audio track, named by its stream id, on the mp4's timeline |
 | `VTS_01_1.spu.bin` | all the subtitle streams of that VOB: the disc's own subpicture data, with times |
-| `extras.json` | which of these exist for each VOB |
+| `extras.json` | which of these exist for each VOB, and which audio stream each mp4 holds |
 
-A track with no file is still listed, greyed out. When another audio track is
-chosen the video is muted and the m4a is played alongside it, kept within
-0.2 s of the picture. Subtitles are drawn over the video in the disc's own
-colours. Menus keep the audio of their mp4.
+The extras are read from the `extras.json` in the same directory as the mp4
+being played, so they always describe that mp4. A track with no file is still
+listed, greyed out. When another audio track is chosen the video is muted and
+the m4a is played alongside it, kept within 0.2 s of the picture; if the m4a
+can't be played, the player goes back to a track that can and says so.
+Subtitles are drawn over the video in the disc's own colours, and subtitles a
+disc forces on (signs, foreign dialogue) are shown even when Subtitles is Off.
+Menus keep the audio of their mp4.
 
 The mp4's timeline has to be the VOB's presentation timeline with every
 timestamp discontinuity closed up:
@@ -134,9 +139,8 @@ Found while building this; it shapes the design.
 ## Limitations
 
 - Multi-angle titles play the first angle (none of the test discs has one).
-- Subtitle and audio choices made by a disc's own setup menu are honoured,
-  but subtitles a disc forces on (signs, foreign dialogue) are only shown
-  when that subtitle track is switched on.
+- Subtitle and audio choices made by a disc's own setup menu are honoured.
+  Forced subtitles are untested: none of the test discs has any.
 - A separate audio track is played by a second media element, so it can be
   up to 0.2 s out of step with the picture.
 - Button highlights are drawn; a menu's own subpicture artwork outside the

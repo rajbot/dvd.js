@@ -114,6 +114,12 @@ export class DvdVM {
     return this.sprm[SPSTN] & 0x40 ? this.sprm[SPSTN] & 0x3f : null;
   }
 
+  // The subtitle stream number the disc last set, displayed or not; 62 and
+  // 63 mean none.
+  get subtitleStream() {
+    return this.sprm[SPSTN] & 0x3f;
+  }
+
   set subtitleTrack(n) {
     this.sprm[SPSTN] = n === null ? this.sprm[SPSTN] & 0x3f : 0x40 | n;
   }

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { parseDvdTime, parseVMG, parseVTS } from '../src/ifo.js';
+import { audioStreamId, parseDvdTime, parseVMG, parseVTS } from '../src/ifo.js';
 import { buildPGC, buildVMG, buildVTS } from './helpers.js';
 
 test('parseDvdTime reads BCD times at the disc frame rate', () => {
@@ -48,4 +48,12 @@ test('parseVTS reads title PGCs, cells and chapters', () => {
 test('parsers reject files of the wrong kind', () => {
   assert.throws(() => parseVMG(buildVTS({ pgcs: [] })), /VIDEO_TS\.IFO/);
   assert.throws(() => parseVTS(new Uint8Array(4096)), /VTS_xx_0\.IFO/);
+});
+
+test('audioStreamId adds the stream number to the base for the format', () => {
+  assert.equal(audioStreamId({ format: 'ac3' }, 0x8000), 0x80);
+  assert.equal(audioStreamId({ format: 'ac3' }, 0x8300), 0x83);
+  assert.equal(audioStreamId({ format: 'lpcm' }, 0x8100), 0xa1);
+  assert.equal(audioStreamId({ format: 'mpeg1' }, 0x8000), 0xc0);
+  assert.equal(audioStreamId({ format: 'dts' }, 0x8200), 0x8a);
 });

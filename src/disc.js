@@ -9,10 +9,9 @@
 // and the button tables, and their subpictures give the button highlights.
 
 import { Domain } from './vm.js';
-import { parseVMG, parseVTS } from './ifo.js';
+import { audioStreamId, parseVMG, parseVTS } from './ifo.js';
 import { VobScanner, decodeSpu } from './nav.js';
 
-const AUDIO_STREAM = { ac3: 0x80, dts: 0x88, lpcm: 0xa0, mpeg1: 0xc0, mpeg2ext: 0xc0 };
 const AUDIO_FORMAT = { ac3: 'Dolby Digital', dts: 'DTS', lpcm: 'PCM', mpeg1: 'MPEG', mpeg2ext: 'MPEG' };
 const AUDIO_KIND = { 2: 'for the visually impaired', 3: 'commentary', 4: 'commentary 2' };
 const SUBTITLE_KIND = { 2: 'large', 3: 'for children', 5: 'captions', 6: 'large captions', 7: 'captions for children', 9: 'forced', 13: 'commentary', 14: 'large commentary', 15: 'commentary for children' };
@@ -25,6 +24,13 @@ function languageName(code) {
   } catch {
     return code.toUpperCase();
   }
+}
+
+// "2.0", "5.1": how a track's channel count is usually written.
+function channelLayout(channels) {
+  if (channels <= 2) return `${channels}.0`;
+  if (channels === 6 || channels === 8) return `${channels - 1}.1`;
+  return `${channels} ch`;
 }
 
 const pad = (n) => String(n).padStart(2, '0');
@@ -268,12 +274,12 @@ export class Disc {
     step.pgc.audioControl.forEach((control, n) => {
       const attr = attrs.audio[n];
       if (!(control & 0x8000) || !attr) return;
-      const id = ((AUDIO_STREAM[attr.format] ?? 0x80) + ((control >> 8) & 7)).toString(16).padStart(2, '0');
+      const id = audioStreamId(attr, control).toString(16).padStart(2, '0');
       const url = (extras && extras.audio.get(id)) || null;
       // Without extras.json all we know is that the mp4 has one of them.
-      const inMp4 = extras && extras.main ? extras.main === id : audio.length === 0;
+      const inMp4 = extras ? extras.main === id : audio.length === 0;
       const what = [languageName(attr.lang) || `Track ${n + 1}`, AUDIO_KIND[attr.codeExtension]].filter(Boolean).join(' ');
-      audio.push({ n, id, url, available: inMp4 || !!url, short: what, label: `${what} (${AUDIO_FORMAT[attr.format] || attr.format} ${attr.channels}.0)` });
+      audio.push({ n, id, url, available: inMp4 || !!url, short: what, label: `${what} (${AUDIO_FORMAT[attr.format] || attr.format} ${channelLayout(attr.channels)})` });
     });
     const wide = attrs.video.aspect === '16:9';
     const subs = [];
@@ -285,13 +291,15 @@ export class Disc {
       subs.push({ n, id, available: !!(extras && extras.subsUrl), label: what });
     });
     // Tell apart tracks that would otherwise read the same ("English", "English").
-    for (const list of [audio, subs]) {
+    const number = (list, field) => {
+      const names = list.map((track) => track[field]);
       list.forEach((track, i) => {
-        const same = list.filter((other) => other.label === track.label);
-        if (same.length > 1) track.name = `${track.label} ${list.slice(0, i + 1).filter((other) => other.label === track.label).length}`;
+        if (names.filter((name) => name === names[i]).length > 1) track[field] = `${names[i]} ${names.slice(0, i + 1).filter((name) => name === names[i]).length}`;
       });
-      for (const track of list) track.label = track.name || track.label;
-    }
+    };
+    number(audio, 'label');
+    number(audio, 'short');
+    number(subs, 'label');
     return { audio, subs };
   }
 

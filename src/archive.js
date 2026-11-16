@@ -49,15 +49,19 @@ export class ArchiveSource {
     const images = meta.files.filter((f) => f.source === 'original' && (f.format === 'ISO Image' || IMAGE_NAME.test(f.name)));
     const image = imageName ? images.find((f) => f.name === imageName) : images[0];
     if (!image) throw new Error(imageName ? `"${imageName}" is not a disc image in ${identifier}` : `${identifier} has no DVD disc image`);
-    const source = new ArchiveSource(identifier, meta, image.name);
+    const source = new ArchiveSource(identifier, meta, image.name, images.map((f) => f.name));
     if (mp4Meta) source.mp4Items.push({ identifier: mp4Identifier, files: mp4Meta.files });
     return source;
   }
 
-  constructor(identifier, meta, image) {
+  constructor(identifier, meta, image, images = [image]) {
+    const stem = (name) => name.split('/').pop().replace(/\.[^.]+$/, '').toLowerCase();
     this.identifier = identifier;
     this.mp4Items = [{ identifier, files: meta.files }];
     this.image = image;
+    this.disc = stem(image);
+    this.otherDiscs = images.map(stem).filter((name) => name !== this.disc);
+    this.manifests = new Map();
     this.title = meta.metadata?.title || identifier;
     this.link = `${ARCHIVE}/details/${encodeURIComponent(identifier)}`;
   }
@@ -73,12 +77,13 @@ export class ArchiveSource {
 
   // Files called `leaf` in an item, in any directory. Items with several
   // discs keep each disc's files in a directory named after its image
-  // ("Disc 2.iso" -> "Disc 2/VTS_01_1.mp4"); those win.
+  // ("Disc 2.iso" -> "Disc 2/VTS_01_1.mp4"); those win, and files in another
+  // disc's directory are never used.
   named(files, leaf) {
-    const disc = this.image.split('/').pop().replace(/\.[^.]+$/, '').toLowerCase();
+    const dirs = (f) => f.name.toLowerCase().split('/').slice(0, -1);
     const found = files.filter((f) => f.name.split('/').pop().toLowerCase() === leaf.toLowerCase());
-    const mine = found.filter((f) => f.name.toLowerCase().split('/').slice(0, -1).includes(disc));
-    return mine.length ? mine : found;
+    const mine = found.filter((f) => dirs(f).includes(this.disc));
+    return mine.length ? mine : found.filter((f) => !dirs(f).some((dir) => this.otherDiscs.includes(dir)));
   }
 
   discUrl(name) {
@@ -93,37 +98,48 @@ export class ArchiveSource {
     return (await get(this.discUrl(name), signal)).body;
   }
 
-  // Prefer the mp4 the archive derived itself; until it makes one for every
-  // VOB, fall back to an uploaded file of the same name.
-  async mp4(base) {
-    for (const { identifier, files } of this.mp4Items) {
-      const found = this.named(files, `${base}.mp4`);
+  // The item and file that hold the mp4 of <base>.VOB. Prefer the mp4 the
+  // archive derived itself; until it makes one for every VOB, fall back to an
+  // uploaded file of the same name.
+  pick(base) {
+    for (const item of this.mp4Items) {
+      const found = this.named(item.files, `${base}.mp4`);
       const file = found.find((f) => f.source === 'derivative') || found[0];
-      if (file) return { url: this.fileUrl(file.name, identifier), duration: parseLength(file.length), derivative: file.source === 'derivative' };
+      if (file) return { item, file };
     }
     return null;
   }
 
-  async loadManifest() {
-    for (const { identifier, files } of this.mp4Items) {
-      const [file] = this.named(files, 'extras.json');
-      if (!file) continue;
-      const dir = file.name.split('/').slice(0, -1).join('/');
-      const data = await (await get(this.corsUrl(file.name, identifier))).json();
-      return { data, identifier, path: (name) => (dir ? `${dir}/${name}` : name) };
-    }
-    return null;
+  async mp4(base) {
+    const picked = this.pick(base);
+    if (!picked) return null;
+    const { item, file } = picked;
+    return { url: this.fileUrl(file.name, item.identifier), duration: parseLength(file.length), derivative: file.source === 'derivative' };
   }
 
-  // Extra audio tracks and subtitles of the title VOB `base`, or null.
+  // Extra audio tracks and subtitles of the title VOB `base`, or null. They
+  // are described by the extras.json next to that VOB's mp4: one made for
+  // other mp4s would name the wrong audio track as the mp4's own.
   async extras(base) {
-    this.manifest ??= this.loadManifest().catch((err) => {
-      console.warn('dvd.js: no audio/subtitle extras:', err);
-      return null;
-    });
-    const m = await this.manifest;
-    if (!m) return null;
-    return extrasFor(m.data, base, (name) => this.fileUrl(m.path(name), m.identifier), (name) => this.corsUrl(m.path(name), m.identifier));
+    const picked = this.pick(base);
+    if (!picked) return null;
+    const { identifier, files } = picked.item;
+    const dir = picked.file.name.split('/').slice(0, -1).join('/');
+    const path = (name) => (dir ? `${dir}/${name}` : name);
+    if (!files.some((f) => f.name === path('extras.json'))) return null;
+    const key = `${identifier}/${dir}`;
+    if (!this.manifests.has(key)) {
+      this.manifests.set(
+        key,
+        get(this.corsUrl(path('extras.json'), identifier))
+          .then((res) => res.json())
+          .catch((err) => {
+            console.warn('dvd.js: no audio/subtitle extras:', err);
+            return null;
+          })
+      );
+    }
+    return extrasFor(await this.manifests.get(key), base, (name) => this.fileUrl(path(name), identifier), (name) => this.corsUrl(path(name), identifier));
   }
 }
 
