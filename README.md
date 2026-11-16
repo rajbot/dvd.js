@@ -1,5 +1,10 @@
 # dvd.js
 
+**Demo: https://www.bitstream.io/dvd.js/** — pick a disc from the list, or try
+[Nina Vision](https://www.bitstream.io/dvd.js/?item=dvdjs-nina-vision-demo) or
+[Big Buck Bunny](https://www.bitstream.io/dvd.js/?item=BigBuckBunny&mp4item=dvdjs-big-buck-bunny-demo)
+directly.
+
 A DVD-Video player for the browser. It plays a DVD image stored in an
 [archive.org](https://archive.org) item, menus included, without downloading
 the image: the video is streamed from ordinary mp4 files (one per VOB on the
