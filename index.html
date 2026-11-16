@@ -71,6 +71,7 @@
         <p>Try:</p>
         <ul>
           <li><a href="?item=dvdjs-nina-vision-demo">Nina Vision</a> (animated menus, 8 titles)</li>
+          <li><a href="?item=BigBuckBunny&amp;mp4item=dvdjs-big-buck-bunny-demo">Big Buck Bunny</a> (animated menus, extras, 14 title sets)</li>
           <li><a href="?item=APOLLO_16MM_ONBOARD_SELECT_VIEWS">Apollo 16mm onboard select views</a> (no menu; plays from the archive’s own mp4)</li>
         </ul>
       </div>
@@ -89,7 +90,7 @@
       async function open() {
         // ?videots=<url of a VIDEO_TS dir>&mp4=<url of the mp4 dir> for local testing
         if (params.get('videots')) return new UrlSource(params.get('videots'), params.get('mp4') || params.get('videots'));
-        return ArchiveSource.open(params.get('item'), params.get('iso'));
+        return ArchiveSource.open(params.get('item'), params.get('iso'), params.get('mp4item'));
       }
 
       if (!params.get('item') && !params.get('videots')) {

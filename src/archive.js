@@ -23,26 +23,35 @@ async function get(url, signal) {
 // A DVD image inside an archive.org item. The IFOs and menu VOBs are read
 // straight out of the image (archive.org serves the files inside an ISO), and
 // the video comes from the item's per-VOB mp4s.
+//
+// mp4Identifier names a second item to take the mp4s from, for discs whose
+// own item doesn't have them (yet).
 export class ArchiveSource {
-  static async open(identifier, imageName = null) {
-    const meta = await (await get(`${ARCHIVE}/metadata/${encodeURIComponent(identifier)}`)).json();
-    if (!meta.files) throw new Error(`archive.org has no item "${identifier}"`);
+  static async open(identifier, imageName = null, mp4Identifier = null) {
+    const load = async (id) => {
+      const meta = await (await get(`${ARCHIVE}/metadata/${encodeURIComponent(id)}`)).json();
+      if (!meta.files) throw new Error(`archive.org has no item "${id}"`);
+      return meta;
+    };
+    const [meta, mp4Meta] = await Promise.all([load(identifier), mp4Identifier ? load(mp4Identifier) : null]);
     const images = meta.files.filter((f) => f.source === 'original' && (f.format === 'ISO Image' || IMAGE_NAME.test(f.name)));
     const image = imageName ? images.find((f) => f.name === imageName) : images[0];
     if (!image) throw new Error(imageName ? `"${imageName}" is not a disc image in ${identifier}` : `${identifier} has no DVD disc image`);
-    return new ArchiveSource(identifier, meta, image.name);
+    const source = new ArchiveSource(identifier, meta, image.name);
+    if (mp4Meta) source.mp4Items.push({ identifier: mp4Identifier, files: mp4Meta.files });
+    return source;
   }
 
   constructor(identifier, meta, image) {
     this.identifier = identifier;
-    this.files = meta.files;
+    this.mp4Items = [{ identifier, files: meta.files }];
     this.image = image;
     this.title = meta.metadata?.title || identifier;
     this.link = `${ARCHIVE}/details/${encodeURIComponent(identifier)}`;
   }
 
-  fileUrl(name) {
-    return `${ARCHIVE}/download/${encodeURIComponent(this.identifier)}/${name.split('/').map(encodeURIComponent).join('/')}`;
+  fileUrl(name, identifier = this.identifier) {
+    return `${ARCHIVE}/download/${encodeURIComponent(identifier)}/${name.split('/').map(encodeURIComponent).join('/')}`;
   }
 
   discUrl(name) {
@@ -61,10 +70,12 @@ export class ArchiveSource {
   // VOB, fall back to an uploaded file of the same name (in any directory).
   async mp4(base) {
     const wanted = `${base}.mp4`.toLowerCase();
-    const found = this.files.filter((f) => f.name.split('/').pop().toLowerCase() === wanted);
-    const file = found.find((f) => f.source === 'derivative') || found[0];
-    if (!file) return null;
-    return { url: this.fileUrl(file.name), duration: parseLength(file.length), derivative: file.source === 'derivative' };
+    for (const { identifier, files } of this.mp4Items) {
+      const found = files.filter((f) => f.name.split('/').pop().toLowerCase() === wanted);
+      const file = found.find((f) => f.source === 'derivative') || found[0];
+      if (file) return { url: this.fileUrl(file.name, identifier), duration: parseLength(file.length), derivative: file.source === 'derivative' };
+    }
+    return null;
   }
 }
 

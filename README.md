@@ -6,7 +6,7 @@ the image: the video is streamed from ordinary mp4 files (one per VOB on the
 disc) and the disc's navigation — first play, menus, buttons, chapters, the
 DVD virtual machine — runs in JavaScript.
 
-    index.html?item=<archive.org identifier>[&iso=<image file name>]
+    index.html?item=<archive.org identifier>[&iso=<image file name>][&mp4item=<identifier>]
 
 No build step and no dependencies: `index.html` loads the ES modules in `src/`
 directly, so the repository can be served as is (for example from GitHub Pages).
@@ -37,6 +37,9 @@ directory, preferring one that archive.org derived itself (`source` is
 `derivative`) over an uploaded one. Today archive.org makes `VTS_xx_n.mp4` for
 some DVD items but nothing for the menu VOBs, so until it does, generate them
 with `tools/make-derivatives.mjs` and upload them alongside the image.
+
+If the mp4s can't go in the disc's own item, put them in another one and name
+it with `&mp4item=`. The disc's own item is still searched first.
 
 The mp4's timeline has to be the VOB's presentation timeline with every
 timestamp discontinuity closed up:
@@ -105,5 +108,5 @@ Found while building this; it shapes the design.
 - Parental levels and region codes are ignored; navigation timers are not run.
 - Seeking and chapter skipping are always allowed (user-operation prohibitions
   are ignored).
-- Tested on two discs: one authored with dvdauthor with motion menus, and one
-  with no menu.
+- Tested on three discs: one authored with dvdauthor with motion menus, one
+  with 14 title sets and motion menus (Big Buck Bunny), and one with no menu.
