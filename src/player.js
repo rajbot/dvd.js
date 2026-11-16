@@ -823,7 +823,8 @@ export class DvdPlayer {
     setTimeout(() => {
       this.flash = null;
     }, ACTION_FLASH);
-    this.go(() => this.vm.activateButton(button.cmd));
+    const time = this.inTitle ? this.cellTime() : null;
+    this.go(() => this.vm.activateButton(button.cmd, time));
   }
 
   pointer(event, click) {

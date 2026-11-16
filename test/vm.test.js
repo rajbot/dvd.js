@@ -138,3 +138,14 @@ test('a menu call that runs off the end of the disc leaves the player where it w
   assert.equal(vm.rsm, null);
   assert.equal(vm.stopped, false);
 });
+
+test('a button over a title that calls a menu resumes where the title was', () => {
+  const vm = new DvdVM(disc());
+  vm.start();
+  vm.activateButton(pick(1));
+  // CallSS VMGM title menu, resume cell 1: what a button over the video does
+  assert.equal(where(vm.activateButton(cmd('3008000001420000'), 42)), `${Domain.VMGM} 1/1`);
+  const step = vm.resume();
+  assert.equal(where(step), `${Domain.VTS} 1/1`);
+  assert.equal(step.resumeTime, 42);
+});

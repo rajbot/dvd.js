@@ -79,6 +79,7 @@ export class DvdVM {
     this.pgN = 1;
     this.cellN = 0;
     this.rsm = null;
+    this.callTime = null;
     this.stopped = false;
   }
 
@@ -142,11 +143,18 @@ export class DvdVM {
 
   // Run a button command. Returns a step if the command jumped somewhere,
   // otherwise null (the menu keeps playing).
-  activateButton(cmd) {
-    const link = this.evalCommands([cmd]);
-    if (!link) return null;
-    const step = this.run(link);
-    return step.type === 'none' ? null : step;
+  // `time` is how far into the current cell a title is, so that a button
+  // over the video that calls a menu can be resumed from where it was.
+  activateButton(cmd, time = null) {
+    this.callTime = time;
+    try {
+      const link = this.evalCommands([cmd]);
+      if (!link) return null;
+      const step = this.run(link);
+      return step.type === 'none' ? null : step;
+    } finally {
+      this.callTime = null;
+    }
   }
 
   // Remote-control "menu" keys. menuId: 2 title, 3 root, 4 subpicture,
@@ -275,7 +283,7 @@ export class DvdVM {
       pgN: this.pgN,
       cellN: cellN || this.cellN,
       regs: [this.sprm[TTN], this.sprm[VTS_TTN], this.sprm[TT_PGCN], this.sprm[PTTN], this.sprm[HL_BTNN]],
-      time: null, // seconds into the cell, when the player knows
+      time: !cellN || cellN === this.cellN ? this.callTime ?? null : null, // seconds into the cell, when the player knows
     };
   }
 
