@@ -1,0 +1,167 @@
+.dvd-player {
+  --dvd-accent: #ffd500;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  background: #000;
+  color: #eee;
+  font: 14px/1.4 system-ui, sans-serif;
+  outline: none;
+}
+
+.dvd-stage {
+  position: relative;
+  width: 100%;
+  aspect-ratio: var(--dvd-aspect, 4 / 3);
+  background: #000;
+  overflow: hidden;
+}
+
+.dvd-player:fullscreen {
+  justify-content: center;
+}
+
+.dvd-player:fullscreen .dvd-stage {
+  width: auto;
+  max-width: 100%;
+  height: calc(100vh - 44px);
+  margin: 0 auto;
+}
+
+.dvd-stage video,
+.dvd-overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.dvd-stage video {
+  object-fit: fill;
+  visibility: hidden;
+}
+
+.dvd-stage video.dvd-active {
+  visibility: visible;
+}
+
+.dvd-message {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.7);
+  text-align: center;
+}
+
+.dvd-message[hidden],
+.dvd-note[hidden] {
+  display: none;
+}
+
+.dvd-message p {
+  margin: 0;
+  max-width: 40em;
+  font-size: 18px;
+  overflow-wrap: anywhere;
+}
+
+.dvd-message p:empty {
+  display: none;
+}
+
+.dvd-big {
+  padding: 12px 28px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--dvd-accent);
+  color: #000;
+  font: inherit;
+  font-size: 18px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.dvd-note {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 12px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.8);
+}
+
+.dvd-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 0 8px;
+  background: #1b1b1b;
+}
+
+.dvd-controls button {
+  flex: none;
+  min-width: 34px;
+  height: 32px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.dvd-controls button:hover:not(:disabled) {
+  background: #333;
+}
+
+.dvd-controls button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.dvd-controls button:focus-visible,
+.dvd-big:focus-visible,
+.dvd-controls input:focus-visible {
+  outline: 2px solid var(--dvd-accent);
+  outline-offset: 1px;
+}
+
+.dvd-controls input[type='range'] {
+  accent-color: var(--dvd-accent);
+}
+
+.dvd-seek {
+  flex: 1 1 80px;
+  min-width: 40px;
+}
+
+.dvd-volume {
+  flex: 0 1 70px;
+  min-width: 30px;
+}
+
+.dvd-time,
+.dvd-where {
+  flex: none;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.dvd-where {
+  color: #aaa;
+}
+
+@media (max-width: 640px) {
+  .dvd-where,
+  .dvd-volume {
+    display: none;
+  }
+}

@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>dvd.js</title>
+    <link rel="stylesheet" href="dvd.css" />
+    <style>
+      body {
+        margin: 0;
+        background: #111;
+        color: #ddd;
+        font: 15px/1.5 system-ui, sans-serif;
+      }
+      main {
+        max-width: 960px;
+        margin: 0 auto;
+        padding: 16px;
+      }
+      h1 {
+        margin: 0 0 12px;
+        font-size: 20px;
+      }
+      h1 small {
+        font-size: 14px;
+        font-weight: normal;
+      }
+      a {
+        color: #ffd500;
+      }
+      form {
+        display: flex;
+        gap: 8px;
+        margin: 16px 0;
+      }
+      form input {
+        flex: 1;
+        min-width: 0;
+        padding: 8px;
+        border: 1px solid #444;
+        border-radius: 4px;
+        background: #000;
+        color: inherit;
+        font: inherit;
+      }
+      form button {
+        padding: 8px 16px;
+        border: 0;
+        border-radius: 4px;
+        background: #ffd500;
+        font: inherit;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      .help {
+        color: #999;
+        font-size: 13px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1 id="title">dvd.js</h1>
+      <div id="player"></div>
+      <div id="picker" hidden>
+        <p>Plays a DVD image from an archive.org item, menus included, by streaming the item’s mp4s.</p>
+        <form>
+          <input name="item" placeholder="archive.org identifier" aria-label="archive.org identifier" required />
+          <button>Play</button>
+        </form>
+        <p>Try:</p>
+        <ul>
+          <li><a href="?item=dvdjs-nina-vision-demo">Nina Vision</a> (animated menus, 8 titles)</li>
+          <li><a href="?item=APOLLO_16MM_ONBOARD_SELECT_VIEWS">Apollo 16mm onboard select views</a> (no menu; plays from the archive’s own mp4)</li>
+        </ul>
+      </div>
+      <p class="help" id="help" hidden>
+        Menus: click a button, or use the arrow keys and Enter. Space pauses, ←/→ skip 10 seconds, M opens the disc menu, F is full screen.
+      </p>
+    </main>
+    <script type="module">
+      import { ArchiveSource, UrlSource } from './src/archive.js';
+      import { DvdPlayer } from './src/player.js';
+
+      const params = new URLSearchParams(location.search);
+      const container = document.getElementById('player');
+      const options = { debug: params.has('debug') };
+
+      async function open() {
+        // ?videots=<url of a VIDEO_TS dir>&mp4=<url of the mp4 dir> for local testing
+        if (params.get('videots')) return new UrlSource(params.get('videots'), params.get('mp4') || params.get('videots'));
+        return ArchiveSource.open(params.get('item'), params.get('iso'));
+      }
+
+      if (!params.get('item') && !params.get('videots')) {
+        document.getElementById('picker').hidden = false;
+      } else {
+        document.getElementById('help').hidden = false;
+        const player = new DvdPlayer(container, options);
+        player.message('Loading disc…');
+        open()
+          .then(async (source) => {
+            document.title = `${source.title} · dvd.js`;
+            const title = document.getElementById('title');
+            title.textContent = `${source.title} `;
+            if (source.link) {
+              const small = document.createElement('small');
+              const link = document.createElement('a');
+              link.href = source.link;
+              link.textContent = 'archive.org item';
+              small.append(link);
+              title.append(small);
+            }
+            const { Disc } = await import('./src/disc.js');
+            player.load(await Disc.open(source));
+            window.dvdPlayer = player;
+          })
+          .catch((err) => player.fail(err));
+      }
+    </script>
+  </body>
+</html>
