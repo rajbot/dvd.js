@@ -68,10 +68,15 @@ export class ArchiveSource {
 
   // Prefer the mp4 the archive derived itself; until it makes one for every
   // VOB, fall back to an uploaded file of the same name (in any directory).
+  // Items with several discs keep each disc's mp4s in a directory named
+  // after its image ("Disc 2.iso" -> "Disc 2/VTS_01_1.mp4").
   async mp4(base) {
     const wanted = `${base}.mp4`.toLowerCase();
+    const disc = this.image.split('/').pop().replace(/\.[^.]+$/, '').toLowerCase();
     for (const { identifier, files } of this.mp4Items) {
-      const found = files.filter((f) => f.name.split('/').pop().toLowerCase() === wanted);
+      let found = files.filter((f) => f.name.split('/').pop().toLowerCase() === wanted);
+      const mine = found.filter((f) => f.name.toLowerCase().split('/').slice(0, -1).includes(disc));
+      if (mine.length) found = mine;
       const file = found.find((f) => f.source === 'derivative') || found[0];
       if (file) return { url: this.fileUrl(file.name, identifier), duration: parseLength(file.length), derivative: file.source === 'derivative' };
     }
