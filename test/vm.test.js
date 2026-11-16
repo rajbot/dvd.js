@@ -117,3 +117,24 @@ test('conditions, arithmetic and goto', () => {
   assert.equal(vm.gprm[2], 10);
   assert.deepEqual(link, { command: 'JumpTT', data1: 2, data2: 0, data3: 0 });
 });
+
+test('a menu call that runs off the end of the disc leaves the player where it was', () => {
+  const d = disc();
+  // A root menu with no cells: it sets g1 and then has nowhere to go.
+  const root = buildPGC({ pre: ['7100000100070000'] });
+  d.vts[1] = parseVTS(
+    buildVTS({
+      pgcs: [{ bytes: buildPGC({ cells: [{ time: 0x00010040, cellId: 1 }] }) }],
+      menus: [{ entryId: 0x83, bytes: root }],
+    })
+  );
+  const vm = new DvdVM(d);
+  vm.start();
+  const title = vm.activateButton(pick(1));
+  assert.equal(vm.menuCall(3, 5), null);
+  assert.equal(vm.domain, Domain.VTS);
+  assert.equal(vm.pgc, title.pgc);
+  assert.equal(vm.gprm[1], 0);
+  assert.equal(vm.rsm, null);
+  assert.equal(vm.stopped, false);
+});

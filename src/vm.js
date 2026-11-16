@@ -156,13 +156,20 @@ export class DvdVM {
     const fromTitle = this.domain === Domain.VTS;
     const domain = menuId === 2 ? Domain.VMGM : Domain.VTSM;
     if (!this.findMenu(domain, menuId)) return null;
+    const { gprm, sprm, vtsN, pgc, pgcN, pgN, cellN, rsm, stopped } = this;
+    const before = { gprm: gprm.slice(), sprm: sprm.slice(), domain: this.domain, vtsN, pgc, pgcN, pgN, cellN, rsm, stopped };
     if (fromTitle) {
       this.saveResume(this.cellN);
       this.rsm.time = time;
     }
     this.domain = domain;
     this.setMenu(menuId);
-    return this.run(this.playPGC());
+    const step = this.run(this.playPGC());
+    if (step.type !== 'stop') return step;
+    // Some discs' menu entries only make sense from where the disc expects
+    // them and otherwise run off the end: stay where we were instead.
+    Object.assign(this, before);
+    return null;
   }
 
   jumpTitle(title) {

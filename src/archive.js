@@ -1,6 +1,8 @@
 // Where the disc's files come from. A source gives the player three things:
 //   readFile(name)    -> Uint8Array of a small VIDEO_TS file (the IFOs)
 //   openStream(name)  -> ReadableStream of a VIDEO_TS file (the menu VOBs)
+//   openNav(base)     -> ReadableStream of just the NAV and subpicture packs
+//                        of <base>.VOB, or null if nobody made that file
 //   mp4(base)         -> { url, duration } of the streaming mp4 made from
 //                        <base>.VOB, or null if the item doesn't have one
 
@@ -117,6 +119,17 @@ export class ArchiveSource {
     return { url: this.fileUrl(file.name, item.identifier), duration: parseLength(file.length), derivative: file.source === 'derivative' };
   }
 
+  // The buttons of the menu VOB `base` as a small file of their own
+  // (<base>.nav.bin, beside its mp4), or null if the item has none and the
+  // VOB itself has to be read.
+  async openNav(base, signal) {
+    const picked = this.pick(base);
+    if (!picked) return null;
+    const name = picked.file.name.replace(/\.mp4$/i, '.nav.bin');
+    if (!picked.item.files.some((f) => f.name === name)) return null;
+    return (await get(this.corsUrl(name, picked.item.identifier), signal)).body;
+  }
+
   // Extra audio tracks and subtitles of the title VOB `base`, or null. They
   // are described by the extras.json next to that VOB's mp4: one made for
   // other mp4s would name the wrong audio track as the mp4's own.
@@ -165,6 +178,11 @@ export class UrlSource {
     const url = `${this.mp4Dir}/${base}.mp4`;
     const res = await fetch(url, { method: 'HEAD' });
     return res.ok ? { url, duration: null, derivative: false } : null;
+  }
+
+  async openNav(base, signal) {
+    const res = await fetch(`${this.mp4Dir}/${base}.nav.bin`, { signal });
+    return res.ok ? res.body : null;
   }
 
   async extras(base) {

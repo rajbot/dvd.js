@@ -222,14 +222,29 @@ export class Disc {
   // soon as their mp4 does, and the buttons appear once the scan reaches them.
   scanMenus(maxBytes) {
     for (const set of this.sets.values()) {
-      if (!set.menuVob) continue;
-      set.scan = new MenuScan();
-      this.source
-        .openStream(set.menuVob)
-        .then((stream) => set.scan.run(stream, maxBytes))
-        .catch((err) => {
-          set.scan.error = err;
+      // A menu VOB can be hundreds of megabytes; its buttons are a few of
+      // them, and may have been put in a file of their own.
+      const base = set.menuVob ? set.menuVob.replace(/\.VOB$/, '') : set.files[0]?.base;
+      const nav = base && this.source.openNav ? this.source.openNav(base).catch(() => null) : Promise.resolve(null);
+      if (set.menuVob) {
+        set.scan = new MenuScan();
+        nav
+          .then((stream) => stream || this.source.openStream(set.menuVob))
+          .then((stream) => set.scan.run(stream, maxBytes))
+          .catch((err) => {
+            set.scan.error = err;
+          });
+      } else {
+        // Title VOBs are too big to read, so a title's buttons over the
+        // video only work when there is such a file.
+        nav.then((stream) => {
+          if (!stream) return;
+          const scan = new MenuScan();
+          scan.run(stream, maxBytes).then(() => {
+            set.scan = scan;
+          }, () => {});
         });
+      }
     }
   }
 

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { SUBTITLE_MAGIC, VobScanner, decodeSpu, isNavPack, paletteToRgb, parseSubtitles } from '../src/nav.js';
+import { SUBTITLE_MAGIC, VobScanner, decodeSpu, isNavPack, isSubpicturePack, paletteToRgb, parseSubtitles } from '../src/nav.js';
 
 const SECTOR = 2048;
 
@@ -94,6 +94,28 @@ test('VobScanner finds VOBUs, buttons and subpictures across chunk boundaries', 
   assert.deepEqual([...spu.pixels], [1, 1, 1, 1, 2, 2, 2, 2]);
   assert.deepEqual(spu.palette, [0, 1, 2, 3]);
   assert.deepEqual(spu.alpha, [0, 15, 15, 15]);
+});
+
+test('the NAV and subpicture packs alone scan to the same buttons and highlights', () => {
+  const button = { x1: 100, x2: 200, y1: 50, y2: 90, up: 1, down: 2, left: 1, right: 1, cmd: [0x30, 2, 0, 0, 0, 1, 0, 0] };
+  const packs = [
+    navPack({ startPtm: 1000, endPtm: 46000, vobId: 1, cellId: 1, buttons: [button] }),
+    pesPack(0xe0, [1, 2, 3]),
+    pesPack(0xbd, [0x0b, 0x77], 0x80),
+    pesPack(0xbd, spuUnit(), 0x20),
+    navPack({ startPtm: 46000, endPtm: 91000, vobId: 1, cellId: 2 }),
+    pesPack(0xe0, [4, 5, 6]),
+  ];
+  assert.deepEqual(packs.map((p) => isSubpicturePack(p)), [false, false, false, true, false, false]);
+  const scan = (list) => {
+    const scanner = new VobScanner();
+    for (const p of list) scanner.push(p);
+    return {
+      vobus: scanner.vobus.map((v) => [v.dsi.vobId, v.dsi.cellId, v.pci.startPtm, v.pci.hli.buttons.length]),
+      spus: [...scanner.spus].map(([stream, units]) => [stream, units.map((u) => [u.vobu, [...u.data]])]),
+    };
+  };
+  assert.deepEqual(scan(packs.filter((p) => isNavPack(p) || isSubpicturePack(p))), scan(packs));
 });
 
 test('paletteToRgb converts video-range YCrCb', () => {

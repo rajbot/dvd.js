@@ -471,8 +471,11 @@ export class DvdPlayer {
   menu() {
     if (!this.step) return;
     const time = this.cellTime();
-    const found = this.go(() => this.vm.menuCall(3, time)) || this.go(() => this.vm.menuCall(2, time));
-    if (!found) this.notice('This disc has no menu.');
+    // From inside a menu, a root menu that goes nowhere means "stay here",
+    // not "try the title menu".
+    const stay = this.vm.inMenu && this.vm.findMenu(Domain.VTSM, 3);
+    const found = this.go(() => this.vm.menuCall(3, time)) || (!stay && this.go(() => this.vm.menuCall(2, time)));
+    if (!found && !this.vm.inMenu) this.notice('This disc has no menu.');
   }
 
   resume() {
@@ -751,11 +754,12 @@ export class DvdPlayer {
 
   draw() {
     const state = this.buttons();
-    const subtitle = state ? null : this.subtitleAt();
+    // A title can have buttons over the video and subtitles at once.
+    const subtitle = state && !this.inTitle ? null : this.subtitleAt();
     const n = state ? this.vm.highlightedButton : 0;
     const mode = this.flash === n ? 'action' : 'select';
     let key = subtitle ? `subtitle/${this.subStream.id}/${subtitle.time}` : '';
-    if (state) key = `${this.step.pgcN}/${this.step.cellN}/${state.hli.startPtm}/${n}/${mode}/${state.spu ? state.spu.pixels.length : 0}`;
+    if (state) key += `/${this.step.pgcN}/${this.step.cellN}/${state.hli.startPtm}/${n}/${mode}/${state.spu ? state.spu.pixels.length : 0}`;
     if (key === this.drawn) return;
     this.drawn = key;
     const { ctx, canvas } = this;
@@ -765,8 +769,9 @@ export class DvdPlayer {
     if (!state) return;
     const button = state.hli.buttons[n - 1];
     const coli = state.hli.colors[button.colorN - 1]?.[mode] ?? 0;
-    if (!this.drawHighlight(button, coli, state.spu)) {
-      // Nothing visible to highlight with: outline the button instead.
+    if (!this.drawHighlight(button, coli, state.spu) && !this.inTitle) {
+      // Nothing visible to highlight with: outline the button instead. (Not
+      // over a title, where a button may be meant to stay unseen.)
       ctx.lineWidth = 3;
       ctx.strokeStyle = mode === 'action' ? 'rgba(255, 255, 255, 0.95)' : 'rgba(255, 221, 0, 0.9)';
       ctx.strokeRect(button.x1 + 1.5, button.y1 + 1.5, button.x2 - button.x1 - 3, button.y2 - button.y1 - 3);

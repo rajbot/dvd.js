@@ -9,6 +9,10 @@
 //   VTS_01_1.audio-a1.m4a   each further audio stream (named by stream id)
 //   VTS_01_1.spu.bin        the subtitle (subpicture) streams
 //   extras.json             which of those exist, and which audio stream each mp4 has
+// and for menu VOBs, and title sets with buttons over the video, the part of
+// the VOBs the player reads for the buttons:
+//   VTS_01_0.nav.bin        the NAV packs and subpicture packs (of a title
+//                           set's VOBs together, named after the first)
 // --extras-only makes just these, next to mp4s made earlier. Each mp4 is
 // tagged with the audio stream it holds; next to an mp4 without the tag
 // (made by an older version) every audio stream is written as an m4a, since
@@ -32,7 +36,7 @@ import { closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, re
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { SECTOR, audioStreamId, parseVMG, parseVTS } from '../src/ifo.js';
-import { SUBTITLE_MAGIC, VobScanner } from '../src/nav.js';
+import { SUBTITLE_MAGIC, VobScanner, isNavPack, isSubpicturePack } from '../src/nav.js';
 
 const CHUNK = 8 * 1024 * 1024;
 
@@ -303,6 +307,26 @@ function subtitleFile(scanner, file) {
   return chunks.length > 1 ? Buffer.concat(chunks) : null;
 }
 
+// The NAV packs and subpicture packs of a VOB set, in order: everything the
+// player reads from it (the buttons and their highlights) without the video
+// and audio, so it doesn't have to download the VOBs to find them.
+function navFile(set, dest) {
+  const out = openSync(dest, 'w');
+  const buf = Buffer.alloc(CHUNK);
+  let bytes = 0;
+  for (const file of set.files) {
+    const fd = openSync(file.path, 'r');
+    for (let pos = 0, n; (n = readSync(fd, buf, 0, CHUNK, pos)) > 0; pos += n) {
+      for (let off = 0; off + SECTOR <= n; off += SECTOR) {
+        if (isNavPack(buf, off) || isSubpicturePack(buf, off)) bytes += writeSync(out, buf, off, SECTOR);
+      }
+    }
+    closeSync(fd);
+  }
+  closeSync(out);
+  return bytes;
+}
+
 function main() {
   const flags = process.argv.slice(2).filter((a) => a.startsWith('--'));
   const extrasOnly = flags.includes('--extras-only');
@@ -333,6 +357,12 @@ function main() {
       const set = new VobSet(dir, vobNames);
       const scanner = set.scan();
       const runs = findRuns(scanner.vobus, set);
+      // Menus always get a nav file; titles only if they put buttons over the video.
+      if (runs.some(inMp4) && (!title || scanner.vobus.some((vobu) => vobu.pci.hli.status && vobu.pci.hli.btnNs))) {
+        const nav = set.files[0].name.replace(/\.VOB$/, '.nav.bin');
+        const bytes = navFile(set, join(out, nav));
+        process.stderr.write(`${vobNames.join(' ')}: buttons -> ${nav} (${bytes} bytes)\n`);
+      }
       set.files.forEach((file, i) => {
         const mine = runs.filter((r) => r.file === i);
         const name = file.name.replace(/\.VOB$/, '.mp4');

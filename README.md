@@ -35,7 +35,8 @@ directly, so the repository can be served as is (for example from GitHub Pages).
    the menu's mp4 is already playing. Its NAV packs give the button positions
    and commands, and its subpicture stream gives the button highlights, which
    are drawn on a canvas over the video. Buttons work with the mouse or with
-   the arrow keys and Enter.
+   the arrow keys and Enter. If the item has a `.nav.bin` file for the VOB
+   (see [Buttons](#buttons)), that is read instead of the VOB.
 
 ### The mp4s it needs
 
@@ -54,6 +55,20 @@ it with `&mp4item=`. The disc's own item is still searched first.
 An item can hold several discs. Pick one with `&iso=`, and keep each disc's
 mp4s in a directory named after its image (`Disc 2.iso` -> `Disc 2/VTS_01_1.mp4`).
 A disc never uses files from another disc's directory.
+
+### Buttons
+
+A menu VOB can be hundreds of megabytes, and a menu's buttons can't be used
+until the player has read as far as that menu. So `tools/make-derivatives.mjs`
+also writes `VTS_01_0.nav.bin` next to `VTS_01_0.mp4`: the VOB's NAV packs
+and subpicture packs and nothing else, a few megabytes at most. The player
+reads it instead of the VOB when it is there.
+
+Titles can have buttons over the video too (a choice of what to watch next, a
+hidden extra). The player never reads title VOBs, so those buttons only work
+from a nav file: the tool writes one for each title set that has buttons,
+covering all of the set's VOBs and named after the first
+(`VTS_09_1.nav.bin`).
 
 ### Audio tracks and subtitles
 
@@ -122,7 +137,7 @@ To play a disc from local files instead of archive.org:
 | `src/disc.js` | Maps cells onto the mp4 timelines; streams the menu VOBs |
 | `src/archive.js` | archive.org item access (and plain URLs for local use) |
 | `src/player.js` | The player UI |
-| `tools/make-derivatives.mjs` | Makes the per-VOB mp4s with ffmpeg |
+| `tools/make-derivatives.mjs` | Makes the per-VOB mp4s with ffmpeg, and the audio, subtitle and button files |
 
 ## What archive.org allows from another origin
 
@@ -145,14 +160,18 @@ Found while building this; it shapes the design.
   up to 0.2 s out of step with the picture.
 - Button highlights are drawn; a menu's own subpicture artwork outside the
   highlighted button is not.
-- Menu VOBs over 512 MB are not scanned to the end.
+- Without a `.nav.bin` file, a menu VOB over 512 MB is not scanned to the
+  end, and buttons over a title's video don't work at all.
+- From inside a menu, the Menu button does nothing on discs whose root menu
+  only works when called from a title.
 - Parental levels and region codes are ignored; navigation timers are not run.
 - Seeking and chapter skipping are always allowed (user-operation prohibitions
   are ignored).
-- Tested on six discs: one authored with dvdauthor with motion menus, one
+- Tested on eight discs: one authored with dvdauthor with motion menus, one
   with 14 title sets and motion menus (Big Buck Bunny), a three-disc set with
-  still menus and titles split across several VOBs (BBS: The Documentary),
-  and one with no menu.
+  still menus and titles split across several VOBs (BBS: The Documentary), a
+  two-disc set with scripted menus, a branching "interactive" version and
+  buttons over the video (GET LAMP), and one with no menu.
 
 ## License
 

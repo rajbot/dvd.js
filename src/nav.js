@@ -23,6 +23,15 @@ export function isNavPack(u8, off = 0) {
   );
 }
 
+// A pack of private stream 1 that carries a subpicture stream.
+export function isSubpicturePack(u8, off = 0) {
+  if (!isStartCode(u8, off, 0xba)) return false;
+  const p = off + 14 + (u8[off + 13] & 7);
+  if (!isStartCode(u8, p, 0xbd)) return false;
+  const stream = u8[p + 9 + u8[p + 8]];
+  return stream >= 0x20 && stream <= 0x3f;
+}
+
 function parseButtons(dv, off, count) {
   const buttons = [];
   for (let i = 0; i < count; i++) {
