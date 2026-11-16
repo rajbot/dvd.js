@@ -11,6 +11,11 @@ the image: the video is streamed from ordinary mp4 files (one per VOB on the
 disc) and the disc's navigation — first play, menus, buttons, chapters, the
 DVD virtual machine — runs in JavaScript.
 
+It also supports a title's multiple audio streams (commentaries, other
+languages) and multiple subtitle streams, with Audio and Subtitles buttons
+under the video to switch between them or turn subtitles off. See
+[Audio tracks and subtitles](#audio-tracks-and-subtitles).
+
     index.html?item=<archive.org identifier>[&iso=<image file name>][&mp4item=<identifier>]
 
 No build step and no dependencies: `index.html` loads the ES modules in `src/`
