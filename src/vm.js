@@ -134,19 +134,26 @@ export class DvdVM {
     this.sprm[AGLN] = n;
   }
 
-  // The cells of the multi-angle block the current cell is in, one per
-  // angle: [first cellN, ...], or null when it isn't in one.
+  // The cells of the multi-angle block the cell is in, one per angle:
+  // [first cellN, ...], or null when it isn't in one. A block runs from a
+  // cell marked as its first to one marked as its last.
   angleCells(cellN = this.cellN) {
     const cells = this.pgc ? this.pgc.cells : [];
-    const cell = cells[cellN - 1];
-    if (!cell || cell.blockType !== 1) return null;
+    const inBlock = (n) => n >= 1 && n <= cells.length && cells[n - 1].blockType === 1;
+    if (!inBlock(cellN)) return null;
     let first = cellN;
-    while (first > 1 && cells[first - 1].blockMode !== 1 && cells[first - 2].blockType === 1) first--;
+    while (cells[first - 1].blockMode !== 1 && inBlock(first - 1) && cells[first - 2].blockMode !== 3) first--;
     const block = [first];
-    while (cells[block[block.length - 1] - 1].blockMode !== 3 && cells[block[block.length - 1]] && cells[block[block.length - 1]].blockType === 1) {
-      block.push(block[block.length - 1] + 1);
-    }
+    for (let n = first; cells[n - 1].blockMode !== 3 && inBlock(n + 1) && cells[n].blockMode !== 1; n++) block.push(n + 1);
     return block;
+  }
+
+  // The cell that plays in place of `cellN`: in a multi-angle block the cell
+  // of the chosen angle (the nearest there is, if the disc asks for an angle
+  // the block doesn't have), otherwise the cell itself.
+  angleCell(cellN = this.cellN) {
+    const block = this.angleCells(cellN);
+    return block ? block[Math.min(Math.max(this.angle, 1), block.length) - 1] : cellN;
   }
 
   get inMenu() {
@@ -358,8 +365,7 @@ export class DvdVM {
   playCell(resumeTime = null) {
     if (this.cellN < 1 || this.cellN > this.pgc.nrCells) return this.playPGCPost();
     // In a multi-angle block, play the cell of the chosen angle.
-    const block = this.angleCells();
-    if (block) this.cellN = block[Math.min(Math.max(this.angle, 1), block.length) - 1];
+    this.cellN = this.angleCell();
     this.syncProgram();
     return { command: 'PlayThis', resumeTime };
   }
@@ -427,14 +433,19 @@ export class DvdVM {
       case 'LinkTopC':
         if (data1) this.highlightedButton = data1;
         return this.playCell();
-      case 'LinkNextC':
+      case 'LinkNextC': {
         if (data1) this.highlightedButton = data1;
-        this.cellN++;
+        // the next cell is past the other angles of a multi-angle block
+        const block = this.angleCells();
+        this.cellN = block ? block[block.length - 1] + 1 : this.cellN + 1;
         return this.playCell();
-      case 'LinkPrevC':
+      }
+      case 'LinkPrevC': {
         if (data1) this.highlightedButton = data1;
-        this.cellN = Math.max(1, this.cellN - 1);
+        const block = this.angleCells();
+        this.cellN = Math.max(1, (block ? block[0] : this.cellN) - 1);
         return this.playCell();
+      }
       case 'LinkTopPG':
         if (data1) this.highlightedButton = data1;
         return this.playPG();

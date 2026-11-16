@@ -112,6 +112,8 @@ and lays the angles one after another in the mp4, in the order their cells
 start in the VOB, which is also where the player expects them (below). The
 Angle button (or C) appears during such a scene; picking an angle seeks to
 the same moment in that angle's cell. A disc's own angle menu works too.
+A scene that runs across a VOB file boundary goes whole into the mp4 of the
+file it starts in, so that each angle stays in one piece.
 
 ### The mp4 timeline
 

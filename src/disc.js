@@ -76,9 +76,12 @@ export class MenuScan {
       vobu.time = prev ? prev.time + prev.duration : 0;
       vobu.duration = Math.max(0, vobu.pci.endPtm - vobu.pci.startPtm) / 90000;
       const key = cellKey(vobu.dsi);
+      // A cell that comes back after another cell is one angle of a
+      // multi-angle scene, stored in interleaved pieces.
       const range = this.cells.get(key);
-      if (!range) this.cells.set(key, { first: this.timed, last: this.timed });
+      if (!range) this.cells.set(key, { first: this.timed, last: this.timed, interleaved: false });
       else if (range.last === this.timed - 1) range.last = this.timed;
+      else range.interleaved = true;
     }
   }
 
@@ -104,7 +107,9 @@ export class MenuScan {
   stateAt(key, time, stream = null) {
     const vobus = this.scanner.vobus;
     const range = this.cells.get(key);
-    if (!range) return null;
+    // An interleaved cell's VOBUs aren't in one run or timed as the mp4 is,
+    // so its buttons can't be told apart: it has none, as far as we know.
+    if (!range || range.interleaved) return null;
     // the cell's last VOBU that starts at or before `time`
     let lo = range.first;
     let hi = range.last;

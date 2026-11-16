@@ -126,15 +126,31 @@ class VobSet {
 // start in the VOBs. That is the order on disc except in a multi-angle block,
 // where the angles' cells are stored interleaved, a piece of each in turn;
 // here each angle's cell is gathered together, one after another.
+//
+// Each VOBU is also given a `home`: the sector that decides which VOB file's
+// mp4 it goes in. That is its own sector, except that a whole multi-angle
+// block goes where the block starts: split at a file boundary, each file
+// would get a part of every angle, and no stretch of either mp4 would be
+// one angle from start to end.
 function timelineOrder(vobus, set) {
-  const cells = new Map(); // "vobId:cellId" -> order of first appearance
+  const cells = new Map(); // "vobId:cellId" -> { order, first, last } (indexes on disc)
   vobus.forEach((vobu, i) => {
     const key = `${vobu.dsi.vobId}:${vobu.dsi.cellId}`;
-    if (!cells.has(key)) cells.set(key, cells.size);
-    vobu.cellOrder = cells.get(key);
+    if (!cells.has(key)) cells.set(key, { order: cells.size, first: i, last: i });
+    vobu.cell = cells.get(key);
+    vobu.cell.last = i;
     vobu.endSector = i + 1 < vobus.length ? vobus[i + 1].sector : set.sectors;
   });
-  return vobus.map((vobu, i) => [vobu, i]).sort(([a, i], [b, j]) => a.cellOrder - b.cellOrder || i - j).map(([vobu]) => vobu);
+  // Cells whose stretches of the disc overlap are the angles of one block.
+  let block = null;
+  for (const cell of cells.values()) {
+    if (block && cell.first <= block.last) block.last = Math.max(block.last, cell.last);
+    else block = { first: cell.first, last: cell.last, cells: 0 };
+    block.cells++;
+    cell.block = block;
+  }
+  for (const vobu of vobus) vobu.home = vobu.cell.block.cells > 1 ? vobus[vobu.cell.block.first].sector : vobu.sector;
+  return vobus.map((vobu, i) => [vobu, i]).sort(([a, i], [b, j]) => a.cell.order - b.cell.order || i - j).map(([vobu]) => vobu);
 }
 
 // Split the VOBUs into runs with continuous timestamps. A run also ends at a
@@ -146,7 +162,7 @@ function findRuns(scanned, set) {
   const runs = [];
   let time = 0;
   vobus.forEach((vobu, i) => {
-    const file = fileOf(vobu.sector);
+    const file = fileOf(vobu.home);
     const prev = vobus[i - 1];
     let run = runs[runs.length - 1];
     if (!run || run.file !== file || prev.pci.endPtm !== vobu.pci.startPtm) {
@@ -339,12 +355,12 @@ function encodeAudio(runs, sources, ids, layouts, outPath) {
 }
 
 // The subpicture units of one VOB file, timed against its mp4.
-function subtitleFile(scanner, file) {
+function subtitleFile(scanner, fileIndex) {
   const chunks = [Buffer.from(SUBTITLE_MAGIC)];
   for (const [stream, units] of scanner.spus) {
     for (const unit of units) {
       const vobu = scanner.vobus[unit.vobu];
-      if (!vobu || unit.pts === null || vobu.sector < file.start || vobu.sector >= file.start + file.sectors) continue;
+      if (!vobu || unit.pts === null || vobu.run.file !== fileIndex) continue;
       const start = mp4Time(vobu.run, vobu.time);
       if (start === null) continue;
       let ticks = (unit.pts - vobu.pci.startPtm) % 0x100000000; // PTS is 33 bits, the VOBU's start 32
@@ -432,7 +448,7 @@ function main() {
             encodeAudio(mine, sources, ids, layouts, (id) => join(out, `${base}.audio-${hexOf(id)}.m4a`));
             extras.audio = ids.map(hexOf);
           }
-          const subs = subtitleFile(scanner, file);
+          const subs = subtitleFile(scanner, i);
           if (subs) {
             process.stderr.write(`  subtitles -> ${base}.spu.bin (${subs.length} bytes)\n`);
             writeFileSync(join(out, `${base}.spu.bin`), subs);

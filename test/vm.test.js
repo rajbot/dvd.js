@@ -194,3 +194,35 @@ test('a multi-angle block plays the chosen angle and then moves past the others'
   vm.angle = 9;
   assert.equal(where(vm.jumpCell(2)), `${Domain.VTS} 1/4`);
 });
+
+test('multi-angle blocks: angle 0, next/previous cell, and two blocks in a row', () => {
+  const d = disc();
+  // cell 1, a two-angle block (2-3) whose last cell is not marked as last,
+  // straight into a second two-angle block (4-5), then cell 6
+  const cells = [
+    { time: 0x00001040, cellId: 1 },
+    { time: 0x00002040, vobId: 2, cellId: 1, blockMode: 1 },
+    { time: 0x00002040, vobId: 3, cellId: 1, blockMode: 2 },
+    { time: 0x00002040, vobId: 4, cellId: 1, blockMode: 1 },
+    { time: 0x00002040, vobId: 5, cellId: 1, blockMode: 3 },
+    { time: 0x00001040, cellId: 2 },
+  ];
+  d.vts[1] = parseVTS(buildVTS({ pgcs: [{ bytes: buildPGC({ cells }) }] }));
+  const vm = new DvdVM(d);
+  vm.start();
+  vm.activateButton(pick(1));
+  assert.deepEqual(vm.angleCells(2), [2, 3]);
+  assert.deepEqual(vm.angleCells(3), [2, 3]);
+  assert.deepEqual(vm.angleCells(5), [4, 5]);
+  vm.angle = 0; // not a real angle: the first one plays
+  assert.equal(vm.angleCell(3), 2);
+  vm.angle = 2;
+  assert.equal(where(vm.jumpCell(2)), `${Domain.VTS} 1/3`);
+  const linkNextC = cmd('2001000000000002');
+  const linkPrevC = cmd('2001000000000003');
+  assert.equal(where(vm.activateButton(linkNextC)), `${Domain.VTS} 1/5`); // the next scene, same angle
+  assert.equal(where(vm.activateButton(linkNextC)), `${Domain.VTS} 1/6`);
+  assert.equal(where(vm.activateButton(linkPrevC)), `${Domain.VTS} 1/5`);
+  assert.equal(where(vm.activateButton(linkPrevC)), `${Domain.VTS} 1/3`);
+  assert.equal(where(vm.activateButton(linkPrevC)), `${Domain.VTS} 1/1`);
+});

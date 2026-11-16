@@ -395,6 +395,9 @@ export class DvdPlayer {
     } else if (stillTime) {
       this.hold(stillTime);
     } else {
+      // In a multi-angle scene the mp4 goes straight on into the next angle:
+      // hold this frame until the next cell is up.
+      if (this.angles()) video.pause();
       this.go(() => this.vm.cellEnded());
     }
   }
@@ -440,15 +443,28 @@ export class DvdPlayer {
   // Where each cell of the title starts. The angles of a multi-angle block
   // are the same stretch of the title, so only the one being shown counts.
   timeline() {
+    const { pgc, cellN } = this.step;
+    const made = this.timelineFor;
+    if (made && made.pgc === pgc && made.cellN === cellN && made.angle === this.vm.angle) return made.timeline;
     const starts = [];
     let total = 0;
-    this.step.pgc.cells.forEach((cell, i) => {
+    const playing = this.vm.angleCells(cellN) || [];
+    pgc.cells.forEach((cell, i) => {
       const block = this.vm.angleCells(i + 1);
-      const shown = !block || block[Math.min(this.vm.angle, block.length) - 1] === i + 1;
+      // the angle on screen in the scene being played, the chosen one elsewhere
+      const shown = !block || (playing.includes(i + 1) ? cellN : this.vm.angleCell(i + 1)) === i + 1;
       starts.push(block ? starts[block[0] - 1] ?? total : total);
       if (shown) total += cell.playbackTime;
     });
-    return { starts, total };
+    this.timelineFor = { pgc, cellN, angle: this.vm.angle, timeline: { starts, total } };
+    return this.timelineFor.timeline;
+  }
+
+  // The angles of the multi-angle scene on screen and which one it is:
+  // { cells, n }, or null outside such a scene.
+  angles() {
+    const cells = this.inTitle ? this.vm.angleCells(this.step.cellN) : null;
+    return cells && cells.length > 1 ? { cells, n: cells.indexOf(this.step.cellN) + 1 } : null;
   }
 
   position() {
@@ -560,8 +576,9 @@ export class DvdPlayer {
   // Fill the Audio and Subtitles buttons' lists with the title's tracks.
   fillPickers() {
     const { audio, subs } = this.tracks;
-    const angles = (this.inTitle && this.vm.angleCells()) || [];
-    const angle = Math.min(this.vm.angle, angles.length);
+    const scene = this.angles();
+    const angles = scene ? scene.cells : [];
+    const angle = scene ? scene.n : 0;
     const state = [audio.map((t) => [t.n, t.label, t.available]), subs.map((t) => [t.n, t.label, t.available]), this.audioTrack && this.audioTrack.n, this.subTrack && this.subTrack.n, angles.length, angle];
     const key = JSON.stringify(state);
     if (key === this.menus) return;
@@ -587,7 +604,7 @@ export class DvdPlayer {
     fill(this.ui.audio, audio.map((t) => [t.n, t.label, t.available, t === this.audioTrack]), (n) => this.setAudioTrack(n));
     fill(this.ui.subs, [[null, 'Off', true, !this.subTrack], ...subs.map((t) => [t.n, t.label, t.available, t === this.subTrack])], (n) => this.setSubtitleTrack(n));
     fill(this.ui.angle, angles.map((_, i) => [i + 1, `Angle ${i + 1}`, true, i + 1 === angle]), (n) => this.setAngle(n));
-    this.ui.angle.wrap.hidden = angles.length < 2;
+    this.ui.angle.wrap.hidden = !scene;
     this.ui.angle.button.textContent = `Angle: ${angle}/${angles.length}`;
     this.ui.audio.wrap.hidden = audio.length < 2;
     this.ui.subs.wrap.hidden = !subs.length;
@@ -641,19 +658,24 @@ export class DvdPlayer {
 
   // Show the same moment of a multi-angle scene from another camera.
   setAngle(n) {
-    const block = this.inTitle && this.vm.angleCells();
-    if (!block || n < 1 || n > block.length) return;
+    const scene = this.angles();
+    if (!scene || n < 1 || n > scene.cells.length || n === scene.n) return;
+    const cellN = scene.cells[n - 1];
+    if (!this.disc.segments(this.set, this.step.pgc.cellPositions[cellN - 1]).length) {
+      this.notice(`Angle ${n} has no video.`);
+      return;
+    }
     const time = this.cellTime();
     this.vm.angle = n;
-    this.go(() => this.vm.jumpCell(this.vm.cellN, time));
+    this.go(() => this.vm.jumpCell(cellN, time));
   }
 
   // Step to the next audio track, the next subtitle track (then off), or
   // the next camera angle.
   cycle(kind) {
     if (kind === 'angle') {
-      const block = this.inTitle && this.vm.angleCells();
-      if (block && block.length > 1) this.setAngle((Math.min(this.vm.angle, block.length) % block.length) + 1);
+      const scene = this.angles();
+      if (scene) this.setAngle((scene.n % scene.cells.length) + 1);
       return;
     }
     const list = this.tracks[kind].filter((t) => t.available);

@@ -146,6 +146,18 @@ test('MenuScan picks the buttons by time and the highlight by stream, cell by ce
   assert.equal(scan.stateAt('1:3', 1.7, 0x21), null);
 });
 
+test('MenuScan finds no buttons in an interleaved (multi-angle) cell', () => {
+  const button = { x1: 100, x2: 200, y1: 50, y2: 90, up: 1, down: 1, left: 1, right: 1, cmd: [0, 0, 0, 0, 0, 0, 0, 0] };
+  const scan = new MenuScan();
+  // two angles, a piece of each in turn
+  for (const [vobId, startPtm] of [[1, 0], [2, 0], [1, 45000], [2, 45000]]) {
+    scan.push(navPack({ startPtm, endPtm: startPtm + 45000, vobId, cellId: 1, buttons: [button] }));
+  }
+  scan.complete = true;
+  assert.equal(scan.stateAt('1:1', 0.2), null);
+  assert.equal(scan.stateAt('2:1', 0.7), null);
+});
+
 test('paletteToRgb converts video-range YCrCb', () => {
   assert.deepEqual(paletteToRgb({ y: 16, cr: 128, cb: 128 }), [0, 0, 0]);
   assert.deepEqual(paletteToRgb({ y: 235, cr: 128, cb: 128 }), [255, 255, 255]);
