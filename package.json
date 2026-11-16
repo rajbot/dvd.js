@@ -2,6 +2,7 @@
   "name": "dvd.js",
   "version": "0.1.0",
   "description": "DVD-Video player for the browser that streams archive.org mp4 derivatives and runs the disc's menus in JavaScript",
+  "license": "GPL-2.0-or-later",
   "type": "module",
   "private": true,
   "scripts": {

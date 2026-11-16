@@ -110,3 +110,13 @@ Found while building this; it shapes the design.
   are ignored).
 - Tested on three discs: one authored with dvdauthor with motion menus, one
   with 14 title sets and motion menus (Big Buck Bunny), and one with no menu.
+
+## License
+
+GPL-2.0-or-later; see `COPYING`.
+
+dvd.js contains no code from other projects, but the DVD virtual machine
+(`src/vm.js`) follows the design of [libdvdnav](https://code.videolan.org/videolan/libdvdnav)'s
+and the IFO parser (`src/ifo.js`) follows the structure layouts in
+[libdvdread](https://code.videolan.org/videolan/libdvdread). Both are
+GPL-2.0-or-later, so dvd.js uses the same license.
