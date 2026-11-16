@@ -41,6 +41,9 @@ with `tools/make-derivatives.mjs` and upload them alongside the image.
 If the mp4s can't go in the disc's own item, put them in another one and name
 it with `&mp4item=`. The disc's own item is still searched first.
 
+An item can hold several discs. Pick one with `&iso=`, and keep each disc's
+mp4s in a directory named after its image (`Disc 2.iso` -> `Disc 2/VTS_01_1.mp4`).
+
 The mp4's timeline has to be the VOB's presentation timeline with every
 timestamp discontinuity closed up:
 
@@ -108,8 +111,10 @@ Found while building this; it shapes the design.
 - Parental levels and region codes are ignored; navigation timers are not run.
 - Seeking and chapter skipping are always allowed (user-operation prohibitions
   are ignored).
-- Tested on three discs: one authored with dvdauthor with motion menus, one
-  with 14 title sets and motion menus (Big Buck Bunny), and one with no menu.
+- Tested on six discs: one authored with dvdauthor with motion menus, one
+  with 14 title sets and motion menus (Big Buck Bunny), a three-disc set with
+  still menus and titles split across several VOBs (BBS: The Documentary),
+  and one with no menu.
 
 ## License
 
