@@ -12,9 +12,11 @@ disc) and the disc's navigation — first play, menus, buttons, chapters, the
 DVD virtual machine — runs in JavaScript.
 
 It also supports a title's multiple audio streams (commentaries, other
-languages) and multiple subtitle streams, with Audio and Subtitles buttons
-under the video to switch between them or turn subtitles off. See
-[Audio tracks and subtitles](#audio-tracks-and-subtitles).
+languages, 5.1 surround), multiple subtitle streams and multiple camera
+angles, with Audio, Subtitles and Angle buttons under the video to switch
+between them or turn subtitles off. See
+[Audio tracks and subtitles](#audio-tracks-and-subtitles) and
+[Camera angles](#camera-angles).
 
     index.html?item=<archive.org identifier>[&iso=<image file name>][&mp4item=<identifier>]
 
@@ -99,11 +101,26 @@ Subtitles are drawn over the video in the disc's own colours, and subtitles a
 disc forces on (signs, foreign dialogue) are shown even when Subtitles is Off.
 Menus keep the audio of their mp4.
 
+A 5.1 track is kept as 5.1 (AAC) in the mp4 or m4a; other tracks are stereo.
+
+### Camera angles
+
+A multi-angle scene is stored as one cell per angle, the angles' cells cut
+into pieces and interleaved on the disc so a player can switch between them
+without a seek. `make-derivatives.mjs` puts each angle's cell back together
+and lays the angles one after another in the mp4, in the order their cells
+start in the VOB, which is also where the player expects them (below). The
+Angle button (or C) appears during such a scene; picking an angle seeks to
+the same moment in that angle's cell. A disc's own angle menu works too.
+
+### The mp4 timeline
+
 The mp4's timeline has to be the VOB's presentation timeline with every
-timestamp discontinuity closed up:
+timestamp discontinuity closed up, cell by cell:
 
 > mp4 time = the sum of the durations (`vobu_e_ptm − vobu_s_ptm`) of all the
-> VOBUs before that point in the VOB file
+> VOBUs before that point, taking the cells in the order they start in the
+> VOB file and each cell's VOBUs together
 
 That is what a straight transcode gives for a VOB whose clock never resets.
 VOBs made of several pieces (a menu VOB with several menus, a title VOB with
@@ -158,7 +175,8 @@ Found while building this; it shapes the design.
 
 ## Limitations
 
-- Multi-angle titles play the first angle (none of the test discs has one).
+- Switching camera angle seeks, so it is not seamless as on a player, and
+  buttons over the video are not found inside a multi-angle scene.
 - Subtitle and audio choices made by a disc's own setup menu are honoured.
   Forced subtitles are untested: none of the test discs has any.
 - A separate audio track is played by a second media element, so it can be
@@ -172,11 +190,13 @@ Found while building this; it shapes the design.
 - Parental levels and region codes are ignored; navigation timers are not run.
 - Seeking and chapter skipping are always allowed (user-operation prohibitions
   are ignored).
-- Tested on eight discs: one authored with dvdauthor with motion menus, one
+- Tested on nine discs: one authored with dvdauthor with motion menus, one
   with 14 title sets and motion menus (Big Buck Bunny), a three-disc set with
   still menus and titles split across several VOBs (BBS: The Documentary), a
   two-disc set with scripted menus, a branching "interactive" version and
-  buttons over the video (GET LAMP), and one with no menu.
+  buttons over the video (GET LAMP), a demo disc with a four-angle scene,
+  eight 5.1 language tracks and an angle menu (Ultimate DVD Demo), and one
+  with no menu.
 
 ## License
 

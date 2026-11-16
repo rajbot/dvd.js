@@ -29,6 +29,7 @@ export function buildPGC({ cells = [], pre = [], post = [], next = 0, time = 0 }
   }
   cells.forEach((cell, i) => {
     const c = cellOff + i * 24;
+    dv.setUint8(c, ((cell.blockMode || 0) << 6) | ((cell.blockMode ? 1 : 0) << 4)); // an angle block
     dv.setUint8(c + 2, cell.still || 0);
     dv.setUint32(c + 4, cell.time || 0);
     dv.setUint32(c + 8, cell.first || 0);

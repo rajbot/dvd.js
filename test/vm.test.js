@@ -169,3 +169,28 @@ test("a button's time is not carried into another title it jumps to", () => {
   assert.equal(vm.rsm.pgcN, 2);
   assert.equal(vm.rsm.time, null);
 });
+
+test('a multi-angle block plays the chosen angle and then moves past the others', () => {
+  const d = disc();
+  // cell 1, then three angles of the same scene (cells 2-4), then cell 5
+  const cells = [
+    { time: 0x00001040, cellId: 1 },
+    { time: 0x00002040, vobId: 2, cellId: 1, blockMode: 1 },
+    { time: 0x00002040, vobId: 3, cellId: 1, blockMode: 2 },
+    { time: 0x00002040, vobId: 4, cellId: 1, blockMode: 3 },
+    { time: 0x00001040, cellId: 2 },
+  ];
+  d.vts[1] = parseVTS(buildVTS({ pgcs: [{ bytes: buildPGC({ cells }) }] }));
+  const vm = new DvdVM(d);
+  vm.start();
+  vm.activateButton(pick(1));
+  assert.equal(vm.angleCells(), null);
+  assert.equal(where(vm.cellEnded()), `${Domain.VTS} 1/2`); // angle 1 by default
+  assert.deepEqual(vm.angleCells(), [2, 3, 4]);
+  vm.angle = 3;
+  assert.equal(where(vm.jumpCell(vm.cellN, 7)), `${Domain.VTS} 1/4`); // same moment, other camera
+  assert.equal(where(vm.cellEnded()), `${Domain.VTS} 1/5`);
+  // a disc can ask for an angle the block doesn't have
+  vm.angle = 9;
+  assert.equal(where(vm.jumpCell(2)), `${Domain.VTS} 1/4`);
+});

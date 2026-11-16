@@ -152,6 +152,7 @@ export class DvdPlayer {
     };
     ui.audio = menuButton('Audio', 'Audio track');
     ui.subs = menuButton('Subtitles', 'Subtitles');
+    ui.angle = menuButton('Angle', 'Camera angle');
     ui.mute = button('🔊︎', 'Mute', () => this.setVolume(this.volume, !this.muted));
     ui.volume = el('input', 'dvd-volume');
     ui.volume.type = 'range';
@@ -163,7 +164,7 @@ export class DvdPlayer {
     ui.volume.addEventListener('input', () => this.setVolume(Number(ui.volume.value), false));
     ui.full = button('⛶', 'Full screen', () => this.toggleFullscreen());
     this.controls = el('div', 'dvd-controls');
-    this.controls.append(ui.prev, ui.play, ui.next, ui.seek, ui.time, ui.where, ui.menu, ui.resume, ui.audio.wrap, ui.subs.wrap, ui.mute, ui.volume, ui.full);
+    this.controls.append(ui.prev, ui.play, ui.next, ui.seek, ui.time, ui.where, ui.menu, ui.resume, ui.audio.wrap, ui.subs.wrap, ui.angle.wrap, ui.mute, ui.volume, ui.full);
 
     this.root.append(this.stage, this.controls);
     container.append(this.root);
@@ -436,13 +437,17 @@ export class DvdPlayer {
   }
 
   // Length of the current PGC and where each of its cells starts.
+  // Where each cell of the title starts. The angles of a multi-angle block
+  // are the same stretch of the title, so only the one being shown counts.
   timeline() {
     const starts = [];
     let total = 0;
-    for (const cell of this.step.pgc.cells) {
-      starts.push(total);
-      total += cell.playbackTime;
-    }
+    this.step.pgc.cells.forEach((cell, i) => {
+      const block = this.vm.angleCells(i + 1);
+      const shown = !block || block[Math.min(this.vm.angle, block.length) - 1] === i + 1;
+      starts.push(block ? starts[block[0] - 1] ?? total : total);
+      if (shown) total += cell.playbackTime;
+    });
     return { starts, total };
   }
 
@@ -555,7 +560,9 @@ export class DvdPlayer {
   // Fill the Audio and Subtitles buttons' lists with the title's tracks.
   fillPickers() {
     const { audio, subs } = this.tracks;
-    const state = [audio.map((t) => [t.n, t.label, t.available]), subs.map((t) => [t.n, t.label, t.available]), this.audioTrack && this.audioTrack.n, this.subTrack && this.subTrack.n];
+    const angles = (this.inTitle && this.vm.angleCells()) || [];
+    const angle = Math.min(this.vm.angle, angles.length);
+    const state = [audio.map((t) => [t.n, t.label, t.available]), subs.map((t) => [t.n, t.label, t.available]), this.audioTrack && this.audioTrack.n, this.subTrack && this.subTrack.n, angles.length, angle];
     const key = JSON.stringify(state);
     if (key === this.menus) return;
     this.menus = key;
@@ -579,6 +586,9 @@ export class DvdPlayer {
     };
     fill(this.ui.audio, audio.map((t) => [t.n, t.label, t.available, t === this.audioTrack]), (n) => this.setAudioTrack(n));
     fill(this.ui.subs, [[null, 'Off', true, !this.subTrack], ...subs.map((t) => [t.n, t.label, t.available, t === this.subTrack])], (n) => this.setSubtitleTrack(n));
+    fill(this.ui.angle, angles.map((_, i) => [i + 1, `Angle ${i + 1}`, true, i + 1 === angle]), (n) => this.setAngle(n));
+    this.ui.angle.wrap.hidden = angles.length < 2;
+    this.ui.angle.button.textContent = `Angle: ${angle}/${angles.length}`;
     this.ui.audio.wrap.hidden = audio.length < 2;
     this.ui.subs.wrap.hidden = !subs.length;
     this.ui.audio.button.textContent = `Audio: ${this.audioTrack ? this.audioTrack.short : '–'}`;
@@ -596,7 +606,7 @@ export class DvdPlayer {
   }
 
   closePopups() {
-    for (const menu of [this.ui.audio, this.ui.subs]) {
+    for (const menu of [this.ui.audio, this.ui.subs, this.ui.angle]) {
       menu.list.hidden = true;
       menu.button.setAttribute('aria-expanded', 'false');
     }
@@ -610,7 +620,7 @@ export class DvdPlayer {
       const next = items[(at + (event.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length];
       if (next) next.focus();
     } else if (event.key === 'Escape') {
-      const menu = [this.ui.audio, this.ui.subs].find((m) => m.list === list);
+      const menu = [this.ui.audio, this.ui.subs, this.ui.angle].find((m) => m.list === list);
       this.closePopups();
       menu.button.focus();
     } else {
@@ -629,8 +639,23 @@ export class DvdPlayer {
     this.applyTracks();
   }
 
-  // Step to the next audio track, or the next subtitle track (then off).
+  // Show the same moment of a multi-angle scene from another camera.
+  setAngle(n) {
+    const block = this.inTitle && this.vm.angleCells();
+    if (!block || n < 1 || n > block.length) return;
+    const time = this.cellTime();
+    this.vm.angle = n;
+    this.go(() => this.vm.jumpCell(this.vm.cellN, time));
+  }
+
+  // Step to the next audio track, the next subtitle track (then off), or
+  // the next camera angle.
   cycle(kind) {
+    if (kind === 'angle') {
+      const block = this.inTitle && this.vm.angleCells();
+      if (block && block.length > 1) this.setAngle((Math.min(this.vm.angle, block.length) % block.length) + 1);
+      return;
+    }
     const list = this.tracks[kind].filter((t) => t.available);
     if (kind === 'audio') {
       if (list.length < 2) return;
@@ -892,6 +917,8 @@ export class DvdPlayer {
       this.cycle('audio');
     } else if (event.key === 's') {
       this.cycle('subs');
+    } else if (event.key === 'c') {
+      this.cycle('angle');
     } else if (event.key === 'f') {
       this.toggleFullscreen();
     } else {

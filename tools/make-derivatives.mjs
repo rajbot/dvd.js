@@ -96,33 +96,53 @@ class VobSet {
     return { scanner, navBytes };
   }
 
-  // Copy sectors [from, to) of the set into `dest`.
-  copy(from, to, dest) {
+  // Copy the sector ranges [[from, to), ...] of the set into `dest`, end to end.
+  copy(ranges, dest) {
     const out = openSync(dest, 'w');
     const buf = Buffer.alloc(CHUNK);
-    for (const file of this.files) {
-      const a = Math.max(from, file.start);
-      const b = Math.min(to, file.start + file.sectors);
-      if (a >= b) continue;
-      const fd = openSync(file.path, 'r');
-      let pos = (a - file.start) * SECTOR;
-      const end = (b - file.start) * SECTOR;
-      while (pos < end) {
-        const n = readSync(fd, buf, 0, Math.min(CHUNK, end - pos), pos);
-        if (n <= 0) break;
-        writeSync(out, buf, 0, n);
-        pos += n;
+    const fds = new Map();
+    for (const [from, to] of ranges) {
+      for (const file of this.files) {
+        const a = Math.max(from, file.start);
+        const b = Math.min(to, file.start + file.sectors);
+        if (a >= b) continue;
+        if (!fds.has(file)) fds.set(file, openSync(file.path, 'r'));
+        let pos = (a - file.start) * SECTOR;
+        const end = (b - file.start) * SECTOR;
+        while (pos < end) {
+          const n = readSync(fds.get(file), buf, 0, Math.min(CHUNK, end - pos), pos);
+          if (n <= 0) break;
+          writeSync(out, buf, 0, n);
+          pos += n;
+        }
       }
-      closeSync(fd);
     }
+    for (const fd of fds.values()) closeSync(fd);
     closeSync(out);
   }
 }
 
+// The VOBUs in timeline order: cell by cell, the cells in the order they
+// start in the VOBs. That is the order on disc except in a multi-angle block,
+// where the angles' cells are stored interleaved, a piece of each in turn;
+// here each angle's cell is gathered together, one after another.
+function timelineOrder(vobus, set) {
+  const cells = new Map(); // "vobId:cellId" -> order of first appearance
+  vobus.forEach((vobu, i) => {
+    const key = `${vobu.dsi.vobId}:${vobu.dsi.cellId}`;
+    if (!cells.has(key)) cells.set(key, cells.size);
+    vobu.cellOrder = cells.get(key);
+    vobu.endSector = i + 1 < vobus.length ? vobus[i + 1].sector : set.sectors;
+  });
+  return vobus.map((vobu, i) => [vobu, i]).sort(([a, i], [b, j]) => a.cellOrder - b.cellOrder || i - j).map(([vobu]) => vobu);
+}
+
 // Split the VOBUs into runs with continuous timestamps. A run also ends at a
-// VOB file boundary, so every run belongs to exactly one mp4.
-function findRuns(vobus, set) {
+// VOB file boundary, so every run belongs to exactly one mp4. A run's sectors
+// are `ranges`: one stretch of the VOB, or several for an interleaved cell.
+function findRuns(scanned, set) {
   const fileOf = (sector) => set.files.findIndex((f) => sector >= f.start && sector < f.start + f.sectors);
+  const vobus = timelineOrder(scanned, set);
   const runs = [];
   let time = 0;
   vobus.forEach((vobu, i) => {
@@ -130,11 +150,12 @@ function findRuns(vobus, set) {
     const prev = vobus[i - 1];
     let run = runs[runs.length - 1];
     if (!run || run.file !== file || prev.pci.endPtm !== vobu.pci.startPtm) {
-      run = { file, firstSector: vobu.sector, endSector: 0, startPtm: vobu.pci.startPtm, start: time, duration: 0, hasVideo: false, hasAudio: false, audio: new Set(), cells: [] };
+      run = { file, ranges: [], startPtm: vobu.pci.startPtm, start: time, duration: 0, hasVideo: false, hasAudio: false, audio: new Set(), cells: [] };
       runs.push(run);
     }
-    const next = vobus[i + 1];
-    run.endSector = next ? next.sector : set.sectors;
+    const last = run.ranges[run.ranges.length - 1];
+    if (last && last[1] === vobu.sector) last[1] = vobu.endSector;
+    else run.ranges.push([vobu.sector, vobu.endSector]);
     vobu.run = run;
     if (!prev || prev.dsi.vobId !== vobu.dsi.vobId || prev.dsi.cellId !== vobu.dsi.cellId) {
       run.cells.push({ vobId: vobu.dsi.vobId, cellId: vobu.dsi.cellId, sector: vobu.sector, start: time });
@@ -174,6 +195,22 @@ function firstAudioTrack(vts) {
   return null;
 }
 
+// How many channels each of a title set's audio streams has: stream id -> n.
+function audioChannels(vts) {
+  const channels = new Map();
+  for (const { pgc } of vts.pgcit) {
+    vts.attrs.audio.forEach((attr, n) => {
+      if (pgc.audioControl[n] & 0x8000) channels.set(audioStreamId(attr, pgc.audioControl[n]), attr.channels);
+    });
+  }
+  return channels;
+}
+
+// A surround track stays surround; anything else is mixed to stereo, which
+// is also what silence and menus get.
+const layoutOf = (channels) => (channels === 6 ? '5.1' : 'stereo');
+const bitrateOf = (layout) => (layout === '5.1' ? '384k' : '160k');
+
 // ffmpeg stream specifier for an audio stream id (MPEG audio ids are 0x1c0+).
 const streamSpec = (id) => `#0x${(id >= 0xc0 ? 0x100 + id : id).toString(16)}`;
 const hexOf = (id) => id.toString(16).padStart(2, '0');
@@ -202,10 +239,11 @@ class RunSources {
 
   path(run) {
     const { file } = this;
-    if (run.firstSector === file.start && run.endSector === file.start + file.sectors) return file.path;
+    const [[first, end]] = run.ranges;
+    if (run.ranges.length === 1 && first === file.start && end === file.start + file.sectors) return file.path;
     if (!this.copies.has(run)) {
       const copy = join(this.tmp, `${file.name}.${this.copies.size}.vob`);
-      this.set.copy(run.firstSector, run.endSector, copy);
+      this.set.copy(run.ranges, copy);
       this.copies.set(run, copy);
     }
     return this.copies.get(run);
@@ -221,16 +259,16 @@ const INPUT = ['-analyzeduration', '100M', '-probesize', '100M', '-i'];
 
 // Filter for one run's audio stream `spec` of input `input`, shifted to start
 // at 0 and exactly as long as the run.
-const audioFilter = (input, spec, run, label) => {
+const audioFilter = (input, spec, run, label, layout = 'stereo') => {
   const s = (run.startPtm / 90000).toFixed(6);
   const d = run.duration.toFixed(6);
-  return `[${input}:${spec}]asetpts=PTS-${s}/TB,aresample=48000:async=1:first_pts=0,aformat=sample_fmts=fltp:channel_layouts=stereo,apad=whole_dur=${d},atrim=duration=${d}[${label}]`;
+  return `[${input}:${spec}]asetpts=PTS-${s}/TB,aresample=48000:async=1:first_pts=0,aformat=sample_fmts=fltp:channel_layouts=${layout},apad=whole_dur=${d},atrim=duration=${d}[${label}]`;
 };
-const silence = (run, label) => `anullsrc=r=48000:cl=stereo,atrim=duration=${run.duration.toFixed(6)}[${label}]`;
+const silence = (run, label, layout = 'stereo') => `anullsrc=r=48000:cl=${layout},atrim=duration=${run.duration.toFixed(6)}[${label}]`;
 
 // mainAudio: the stream id the mp4 should carry, null for none, or undefined
 // to take whatever audio there is (menus).
-function encode(file, runs, sources, video, mainAudio, outPath) {
+function encode(file, runs, sources, video, mainAudio, layout, outPath) {
   const fps = video.format === 'PAL' ? '25' : '30000/1001';
   const fpsValue = video.format === 'PAL' ? 25 : 30000 / 1001;
   const height = video.format === 'PAL' ? 576 : 480;
@@ -253,7 +291,7 @@ function encode(file, runs, sources, video, mainAudio, outPath) {
       `[${n}:v:0]bwdif=mode=send_frame:deint=interlaced,fps=${fps}:start_time=${s},setpts=PTS-${s}/TB,` +
         `scale=720:${height},setdar=${dar},format=yuv420p,tpad=stop_mode=clone:stop_duration=${d},trim=end_frame=${frames}[v${n}]`
     );
-    if (anyAudio) filters.push(audible(run) ? audioFilter(n, audioSpec, run, `a${n}`) : silence(run, `a${n}`));
+    if (anyAudio) filters.push(audible(run) ? audioFilter(n, audioSpec, run, `a${n}`, layout) : silence(run, `a${n}`, layout));
     labels += anyAudio ? `[v${n}][a${n}]` : `[v${n}]`;
     for (const cell of run.cells) keyframes.push(mp4Time(run, cell.start).toFixed(3));
     n++;
@@ -261,7 +299,7 @@ function encode(file, runs, sources, video, mainAudio, outPath) {
   if (!n) return false;
   filters.push(`${labels}concat=n=${n}:v=1:a=${anyAudio ? 1 : 0}[v]${anyAudio ? '[a]' : ''}`);
   args.push('-filter_complex', filters.join(';'), '-map', '[v]');
-  if (anyAudio) args.push('-map', '[a]', '-c:a', 'aac', '-b:a', '160k');
+  if (anyAudio) args.push('-map', '[a]', '-c:a', 'aac', '-b:a', bitrateOf(layout));
   if (mainAudio !== undefined) args.push('-metadata', `comment=dvd.js audio=${anyAudio ? hexOf(mainAudio) : 'none'}`);
   args.push(
     '-c:v', 'libx264', '-preset', 'medium', '-crf', '20', '-r', fps, '-g', '60',
@@ -274,7 +312,7 @@ function encode(file, runs, sources, video, mainAudio, outPath) {
 
 // The audio streams `ids` of a VOB file, each as an m4a on the same timeline
 // as the file's mp4, in one pass. outPath(id) names each one.
-function encodeAudio(runs, sources, ids, outPath) {
+function encodeAudio(runs, sources, ids, layouts, outPath) {
   const args = ['-hide_banner', '-loglevel', 'error', '-y', '-copyts'];
   const filters = [];
   const labels = new Map(ids.map((id) => [id, '']));
@@ -286,7 +324,7 @@ function encodeAudio(runs, sources, ids, outPath) {
     if (present.length) args.push(...INPUT, sources.path(run));
     for (const id of ids) {
       const label = `a${hexOf(id)}_${n}`;
-      filters.push(present.includes(id) ? audioFilter(inputs, streamSpec(id), run, label) : silence(run, label));
+      filters.push(present.includes(id) ? audioFilter(inputs, streamSpec(id), run, label, layouts(id)) : silence(run, label, layouts(id)));
       labels.set(id, `${labels.get(id)}[${label}]`);
     }
     if (present.length) inputs++;
@@ -295,7 +333,7 @@ function encodeAudio(runs, sources, ids, outPath) {
   if (!n || !ids.length) return false;
   for (const id of ids) filters.push(`${labels.get(id)}concat=n=${n}:v=0:a=1[out${hexOf(id)}]`);
   args.push('-filter_complex', filters.join(';'));
-  for (const id of ids) args.push('-map', `[out${hexOf(id)}]`, '-c:a', 'aac', '-b:a', '160k', '-movflags', '+faststart', outPath(id));
+  for (const id of ids) args.push('-map', `[out${hexOf(id)}]`, '-c:a', 'aac', '-b:a', bitrateOf(layouts(id)), '-movflags', '+faststart', outPath(id));
   run('ffmpeg', args);
   return true;
 }
@@ -344,11 +382,12 @@ function main() {
       const vts = parseVTS(new Uint8Array(readFileSync(join(dir, `VTS_${id}_0.IFO`))));
       if (names.includes(`VTS_${id}_0.VOB`)) sets.push({ names: [`VTS_${id}_0.VOB`], video: vts.menuAttrs.video });
       const titles = names.filter((n) => new RegExp(`^VTS_${id}_[1-9]\\.VOB$`).test(n)).sort();
-      if (titles.length) sets.push({ names: titles, video: vts.attrs.video, title: true, firstAudio: firstAudioTrack(vts) });
+      if (titles.length) sets.push({ names: titles, video: vts.attrs.video, title: true, firstAudio: firstAudioTrack(vts), channels: audioChannels(vts) });
     }
     const report = [];
     const manifest = {};
-    for (const { names: vobNames, video, title, firstAudio } of sets) {
+    for (const { names: vobNames, video, title, firstAudio, channels } of sets) {
+      const layouts = (id) => layoutOf(channels ? channels.get(id) : 2);
       const set = new VobSet(dir, vobNames);
       const nav = set.files[0].name.replace(/\.VOB$/, '.nav.bin');
       const { scanner, navBytes } = set.scan(join(tmp, nav));
@@ -376,7 +415,7 @@ function main() {
           if (extrasOnly) {
             mainAudio = title ? taggedAudio(join(out, name)) : undefined;
           } else {
-            encode(file, mine, sources, video, mainAudio, join(out, name));
+            encode(file, mine, sources, video, mainAudio, layouts(mainAudio), join(out, name));
             report.push({
               vob: file.name,
               mp4: name,
@@ -390,7 +429,7 @@ function main() {
           const ids = [...new Set(mine.filter(inMp4).flatMap((r) => [...r.audio]))].sort((a, b) => a - b).filter((id) => id !== mainAudio);
           if (ids.length) {
             process.stderr.write(`  audio streams ${ids.map((id) => `0x${hexOf(id)}`).join(', ')} -> ${base}.audio-*.m4a\n`);
-            encodeAudio(mine, sources, ids, (id) => join(out, `${base}.audio-${hexOf(id)}.m4a`));
+            encodeAudio(mine, sources, ids, layouts, (id) => join(out, `${base}.audio-${hexOf(id)}.m4a`));
             extras.audio = ids.map(hexOf);
           }
           const subs = subtitleFile(scanner, file);

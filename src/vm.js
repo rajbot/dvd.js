@@ -125,6 +125,30 @@ export class DvdVM {
     this.sprm[SPSTN] = n === null ? this.sprm[SPSTN] & 0x3f : 0x40 | n;
   }
 
+  // The camera angle (1-9) the disc or the viewer chose.
+  get angle() {
+    return this.sprm[AGLN];
+  }
+
+  set angle(n) {
+    this.sprm[AGLN] = n;
+  }
+
+  // The cells of the multi-angle block the current cell is in, one per
+  // angle: [first cellN, ...], or null when it isn't in one.
+  angleCells(cellN = this.cellN) {
+    const cells = this.pgc ? this.pgc.cells : [];
+    const cell = cells[cellN - 1];
+    if (!cell || cell.blockType !== 1) return null;
+    let first = cellN;
+    while (first > 1 && cells[first - 1].blockMode !== 1 && cells[first - 2].blockType === 1) first--;
+    const block = [first];
+    while (cells[block[block.length - 1] - 1].blockMode !== 3 && cells[block[block.length - 1]] && cells[block[block.length - 1]].blockType === 1) {
+      block.push(block[block.length - 1] + 1);
+    }
+    return block;
+  }
+
   get inMenu() {
     return this.domain === Domain.VMGM || this.domain === Domain.VTSM;
   }
@@ -333,11 +357,9 @@ export class DvdVM {
 
   playCell(resumeTime = null) {
     if (this.cellN < 1 || this.cellN > this.pgc.nrCells) return this.playPGCPost();
-    // Multi-angle blocks: always play the first angle.
-    const cell = this.pgc.cells[this.cellN - 1];
-    if (cell.blockType === 1 && cell.blockMode !== 1) {
-      while (this.cellN > 1 && this.pgc.cells[this.cellN - 1].blockMode !== 1) this.cellN--;
-    }
+    // In a multi-angle block, play the cell of the chosen angle.
+    const block = this.angleCells();
+    if (block) this.cellN = block[Math.min(Math.max(this.angle, 1), block.length) - 1];
     this.syncProgram();
     return { command: 'PlayThis', resumeTime };
   }
@@ -351,13 +373,9 @@ export class DvdVM {
         if (link) return link;
       }
     }
-    // Advance, skipping the remaining angles of an angle block.
-    if (cell && cell.blockType === 1) {
-      this.cellN++;
-      while (this.cellN <= this.pgc.nrCells && this.pgc.cells[this.cellN - 1].blockMode >= 2) this.cellN++;
-    } else {
-      this.cellN++;
-    }
+    // Advance, past the other angles of an angle block.
+    const block = this.angleCells();
+    this.cellN = block ? block[block.length - 1] + 1 : this.cellN + 1;
     if (!this.syncProgram()) return this.playPGCPost();
     return this.playCell();
   }
