@@ -273,7 +273,7 @@ export class Disc {
       // Without extras.json all we know is that the mp4 has one of them.
       const inMp4 = extras && extras.main ? extras.main === id : audio.length === 0;
       const what = [languageName(attr.lang) || `Track ${n + 1}`, AUDIO_KIND[attr.codeExtension]].filter(Boolean).join(' ');
-      audio.push({ n, id, url, available: inMp4 || !!url, label: `${what} (${AUDIO_FORMAT[attr.format] || attr.format} ${attr.channels}.0)` });
+      audio.push({ n, id, url, available: inMp4 || !!url, short: what, label: `${what} (${AUDIO_FORMAT[attr.format] || attr.format} ${attr.channels}.0)` });
     });
     const wide = attrs.video.aspect === '16:9';
     const subs = [];

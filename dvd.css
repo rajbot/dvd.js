@@ -98,6 +98,7 @@
 
 .dvd-controls {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
   min-height: 44px;
@@ -118,21 +119,50 @@
   cursor: pointer;
 }
 
-.dvd-controls select {
-  flex: 0 1 auto;
-  min-width: 0;
-  max-width: 11em;
-  height: 28px;
-  border: 1px solid #444;
-  border-radius: 4px;
-  background: #1b1b1b;
-  color: inherit;
-  font: inherit;
-  font-size: 13px;
+.dvd-menu {
+  position: relative;
+  flex: none;
 }
 
-.dvd-controls select[hidden] {
+.dvd-menu[hidden],
+.dvd-popup[hidden] {
   display: none;
+}
+
+.dvd-menu > button {
+  border: 1px solid #555;
+}
+
+.dvd-menu > button::after {
+  content: ' ▴';
+}
+
+.dvd-popup {
+  position: absolute;
+  right: 0;
+  bottom: 100%;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  min-width: 100%;
+  margin-bottom: 6px;
+  padding: 4px;
+  border: 1px solid #555;
+  border-radius: 6px;
+  background: #1b1b1b;
+  white-space: nowrap;
+}
+
+.dvd-popup button {
+  position: relative;
+  padding-left: 28px;
+  text-align: left;
+}
+
+.dvd-popup button[aria-checked='true']::before {
+  content: '✓';
+  position: absolute;
+  left: 9px;
 }
 
 .dvd-stage audio {
@@ -150,7 +180,6 @@
 
 .dvd-controls button:focus-visible,
 .dvd-big:focus-visible,
-.dvd-controls select:focus-visible,
 .dvd-controls input:focus-visible {
   outline: 2px solid var(--dvd-accent);
   outline-offset: 1px;
@@ -160,9 +189,16 @@
   accent-color: var(--dvd-accent);
 }
 
+/* The seek bar gets a row of its own, above the buttons. */
 .dvd-seek {
-  flex: 1 1 80px;
-  min-width: 40px;
+  order: -1;
+  flex: 1 0 100%;
+  min-width: 0;
+  margin: 6px 0 0;
+}
+
+.dvd-where {
+  margin-right: auto;
 }
 
 .dvd-volume {

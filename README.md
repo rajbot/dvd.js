@@ -47,8 +47,8 @@ mp4s in a directory named after its image (`Disc 2.iso` -> `Disc 2/VTS_01_1.mp4`
 ### Audio tracks and subtitles
 
 A title can have several audio tracks and subtitle tracks. The player lists
-them (from the IFO) in two pickers in the control bar; A and S step through
-them. Browsers can't switch between audio tracks inside an mp4, and DVD
+them (from the IFO) under two buttons in the control bar, Audio and
+Subtitles; A and S step through them. Browsers can't switch between audio tracks inside an mp4, and DVD
 subtitles are pictures, so both need extra files next to a title VOB's mp4.
 `tools/make-derivatives.mjs` writes them:
 

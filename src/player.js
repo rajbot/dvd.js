@@ -125,16 +125,21 @@ export class DvdPlayer {
     ui.where = el('span', 'dvd-where');
     ui.menu = button('Menu', 'Disc menu', () => this.menu());
     ui.resume = button('Resume', 'Back to the title', () => this.resume());
-    const picker = (label, onChange) => {
-      const select = el('select');
-      select.title = label;
-      select.setAttribute('aria-label', label);
-      select.hidden = true;
-      select.addEventListener('change', () => onChange(select.value));
-      return select;
+    // A button that opens a list of choices above the control bar.
+    const menuButton = (label, title) => {
+      const menu = { wrap: el('div', 'dvd-menu'), list: el('div', 'dvd-popup') };
+      menu.button = button(label, title, () => this.togglePopup(menu));
+      menu.button.setAttribute('aria-haspopup', 'menu');
+      menu.button.setAttribute('aria-expanded', 'false');
+      menu.list.setAttribute('role', 'menu');
+      menu.list.setAttribute('aria-label', title);
+      menu.list.hidden = true;
+      menu.wrap.hidden = true;
+      menu.wrap.append(menu.button, menu.list);
+      return menu;
     };
-    ui.audio = picker('Audio track', (value) => this.setAudioTrack(Number(value)));
-    ui.subs = picker('Subtitles', (value) => this.setSubtitleTrack(value === 'off' ? null : Number(value)));
+    ui.audio = menuButton('Audio', 'Audio track');
+    ui.subs = menuButton('Subtitles', 'Subtitles');
     ui.mute = button('🔊︎', 'Mute', () => this.setVolume(this.volume, !this.muted));
     ui.volume = el('input', 'dvd-volume');
     ui.volume.type = 'range';
@@ -146,7 +151,7 @@ export class DvdPlayer {
     ui.volume.addEventListener('input', () => this.setVolume(Number(ui.volume.value), false));
     ui.full = button('⛶', 'Full screen', () => this.toggleFullscreen());
     this.controls = el('div', 'dvd-controls');
-    this.controls.append(ui.prev, ui.play, ui.next, ui.seek, ui.time, ui.where, ui.menu, ui.resume, ui.audio, ui.subs, ui.mute, ui.volume, ui.full);
+    this.controls.append(ui.prev, ui.play, ui.next, ui.seek, ui.time, ui.where, ui.menu, ui.resume, ui.audio.wrap, ui.subs.wrap, ui.mute, ui.volume, ui.full);
 
     this.root.append(this.stage, this.controls);
     container.append(this.root);
@@ -154,6 +159,9 @@ export class DvdPlayer {
     this.canvas.addEventListener('mousemove', (e) => this.pointer(e, false));
     this.canvas.addEventListener('click', (e) => this.pointer(e, true));
     this.root.addEventListener('keydown', (e) => this.key(e));
+    document.addEventListener('click', (e) => {
+      if (!(e.target instanceof Element && e.target.closest('.dvd-menu'))) this.closePopups();
+    });
   }
 
   message(text, action = null, onAction = null) {
@@ -510,28 +518,71 @@ export class DvdPlayer {
     this.setVolume(this.volume, this.muted);
   }
 
+  // Fill the Audio and Subtitles buttons' lists with the title's tracks.
   fillPickers() {
     const { audio, subs } = this.tracks;
-    const key = JSON.stringify([audio.map((t) => [t.n, t.label, t.available]), subs.map((t) => [t.n, t.label, t.available])]);
-    if (key !== this.menus) {
-      this.menus = key;
-      const fill = (select, options) => {
-        select.replaceChildren(
-          ...options.map(([value, label, available]) => {
-            const option = el('option', null, label);
-            option.value = String(value);
-            option.disabled = !available;
-            return option;
-          })
-        );
-      };
-      fill(this.ui.audio, audio.map((t) => [t.n, `Audio: ${t.label}${t.available ? '' : ' (not available)'}`, t.available]));
-      fill(this.ui.subs, [['off', 'Subtitles: off', true], ...subs.map((t) => [t.n, `Subtitles: ${t.label}${t.available ? '' : ' (not available)'}`, t.available])]);
-      this.ui.audio.hidden = audio.length < 2;
-      this.ui.subs.hidden = !subs.length;
+    const state = [audio.map((t) => [t.n, t.label, t.available]), subs.map((t) => [t.n, t.label, t.available]), this.audioTrack && this.audioTrack.n, this.subTrack && this.subTrack.n];
+    const key = JSON.stringify(state);
+    if (key === this.menus) return;
+    this.menus = key;
+    this.closePopups();
+    const fill = (menu, options, onPick) => {
+      menu.list.replaceChildren(
+        ...options.map(([value, label, available, chosen]) => {
+          const item = el('button', null, available ? label : `${label} (not available)`);
+          item.type = 'button';
+          item.setAttribute('role', 'menuitemradio');
+          item.setAttribute('aria-checked', String(!!chosen));
+          item.disabled = !available;
+          item.addEventListener('click', () => {
+            onPick(value);
+            this.closePopups();
+            menu.button.focus();
+          });
+          return item;
+        })
+      );
+    };
+    fill(this.ui.audio, audio.map((t) => [t.n, t.label, t.available, t === this.audioTrack]), (n) => this.setAudioTrack(n));
+    fill(this.ui.subs, [[null, 'Off', true, !this.subTrack], ...subs.map((t) => [t.n, t.label, t.available, t === this.subTrack])], (n) => this.setSubtitleTrack(n));
+    this.ui.audio.wrap.hidden = audio.length < 2;
+    this.ui.subs.wrap.hidden = !subs.length;
+    this.ui.audio.button.textContent = `Audio: ${this.audioTrack ? this.audioTrack.short : '–'}`;
+    this.ui.subs.button.textContent = `Subtitles: ${this.subTrack ? this.subTrack.label : 'Off'}`;
+  }
+
+  togglePopup(menu) {
+    const open = menu.list.hidden;
+    this.closePopups();
+    if (!open) return;
+    menu.list.hidden = false;
+    menu.button.setAttribute('aria-expanded', 'true');
+    const item = menu.list.querySelector('[aria-checked="true"]:not(:disabled)') || menu.list.querySelector('button:not(:disabled)');
+    if (item) item.focus();
+  }
+
+  closePopups() {
+    for (const menu of [this.ui.audio, this.ui.subs]) {
+      menu.list.hidden = true;
+      menu.button.setAttribute('aria-expanded', 'false');
     }
-    if (this.audioTrack) this.ui.audio.value = String(this.audioTrack.n);
-    this.ui.subs.value = this.subTrack ? String(this.subTrack.n) : 'off';
+  }
+
+  // Arrow keys and Escape inside an open list.
+  popupKey(event, list) {
+    const items = [...list.querySelectorAll('button:not(:disabled)')];
+    const at = items.indexOf(document.activeElement);
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      const next = items[(at + (event.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length];
+      if (next) next.focus();
+    } else if (event.key === 'Escape') {
+      const menu = [this.ui.audio, this.ui.subs].find((m) => m.list === list);
+      this.closePopups();
+      menu.button.focus();
+    } else {
+      return;
+    }
+    event.preventDefault();
   }
 
   setAudioTrack(n) {
@@ -744,7 +795,12 @@ export class DvdPlayer {
   }
 
   key(event) {
-    if (event.target instanceof HTMLInputElement || event.target instanceof HTMLSelectElement || event.metaKey || event.ctrlKey || event.altKey) return;
+    const list = event.target instanceof Element && event.target.closest('.dvd-popup');
+    if (list) {
+      this.popupKey(event, list);
+      return;
+    }
+    if (event.target instanceof HTMLInputElement || event.metaKey || event.ctrlKey || event.altKey) return;
     if (event.target instanceof HTMLButtonElement && (event.key === 'Enter' || event.key === ' ')) return;
     const state = this.buttons();
     const arrow = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right' }[event.key];
