@@ -100,6 +100,24 @@ export class DvdVM {
     return this.sprm[TTN];
   }
 
+  // The audio track (0-7) the disc or the viewer chose; 15 means no choice.
+  get audioTrack() {
+    return this.sprm[ASTN];
+  }
+
+  set audioTrack(n) {
+    this.sprm[ASTN] = n;
+  }
+
+  // The subtitle track (0-31) being shown, or null when subtitles are off.
+  get subtitleTrack() {
+    return this.sprm[SPSTN] & 0x40 ? this.sprm[SPSTN] & 0x3f : null;
+  }
+
+  set subtitleTrack(n) {
+    this.sprm[SPSTN] = n === null ? this.sprm[SPSTN] & 0x3f : 0x40 | n;
+  }
+
   get inMenu() {
     return this.domain === Domain.VMGM || this.domain === Domain.VTSM;
   }

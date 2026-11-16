@@ -44,6 +44,26 @@ it with `&mp4item=`. The disc's own item is still searched first.
 An item can hold several discs. Pick one with `&iso=`, and keep each disc's
 mp4s in a directory named after its image (`Disc 2.iso` -> `Disc 2/VTS_01_1.mp4`).
 
+### Audio tracks and subtitles
+
+A title can have several audio tracks and subtitle tracks. The player lists
+them (from the IFO) in two pickers in the control bar; A and S step through
+them. Browsers can't switch between audio tracks inside an mp4, and DVD
+subtitles are pictures, so both need extra files next to a title VOB's mp4.
+`tools/make-derivatives.mjs` writes them:
+
+| File | |
+| --- | --- |
+| `VTS_01_1.mp4` | video, plus the disc's first audio track |
+| `VTS_01_1.audio-a1.m4a` | each further audio track, named by its stream id, on the mp4's timeline |
+| `VTS_01_1.spu.bin` | all the subtitle streams of that VOB: the disc's own subpicture data, with times |
+| `extras.json` | which of these exist for each VOB |
+
+A track with no file is still listed, greyed out. When another audio track is
+chosen the video is muted and the m4a is played alongside it, kept within
+0.2 s of the picture. Subtitles are drawn over the video in the disc's own
+colours. Menus keep the audio of their mp4.
+
 The mp4's timeline has to be the VOB's presentation timeline with every
 timestamp discontinuity closed up:
 
@@ -103,8 +123,12 @@ Found while building this; it shapes the design.
 
 ## Limitations
 
-- One audio track (whichever the mp4 has) and no subtitles.
-- Multi-angle titles play the first angle.
+- Multi-angle titles play the first angle (none of the test discs has one).
+- Subtitle and audio choices made by a disc's own setup menu are honoured,
+  but subtitles a disc forces on (signs, foreign dialogue) are only shown
+  when that subtitle track is switched on.
+- A separate audio track is played by a second media element, so it can be
+  up to 0.2 s out of step with the picture.
 - Button highlights are drawn; a menu's own subpicture artwork outside the
   highlighted button is not.
 - Menu VOBs over 512 MB are not scanned to the end.

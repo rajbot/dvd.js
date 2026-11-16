@@ -12,6 +12,21 @@ import { Domain } from './vm.js';
 import { parseVMG, parseVTS } from './ifo.js';
 import { VobScanner, decodeSpu } from './nav.js';
 
+const AUDIO_STREAM = { ac3: 0x80, dts: 0x88, lpcm: 0xa0, mpeg1: 0xc0, mpeg2ext: 0xc0 };
+const AUDIO_FORMAT = { ac3: 'Dolby Digital', dts: 'DTS', lpcm: 'PCM', mpeg1: 'MPEG', mpeg2ext: 'MPEG' };
+const AUDIO_KIND = { 2: 'for the visually impaired', 3: 'commentary', 4: 'commentary 2' };
+const SUBTITLE_KIND = { 2: 'large', 3: 'for children', 5: 'captions', 6: 'large captions', 7: 'captions for children', 9: 'forced', 13: 'commentary', 14: 'large commentary', 15: 'commentary for children' };
+const languages = typeof Intl !== 'undefined' && Intl.DisplayNames ? new Intl.DisplayNames(['en'], { type: 'language' }) : null;
+
+function languageName(code) {
+  if (!/^[a-z]{2}$/.test(code)) return '';
+  try {
+    return (languages && languages.of(code)) || code.toUpperCase();
+  } catch {
+    return code.toUpperCase();
+  }
+}
+
 const pad = (n) => String(n).padStart(2, '0');
 const cellKey = ({ vobId, cellId }) => `${vobId}:${cellId}`;
 const MIN_SEGMENT = 0.1;
@@ -187,7 +202,8 @@ export class Disc {
     for (const base of bases) {
       const mp4 = await this.source.mp4(base);
       if (!mp4) break;
-      set.files.push({ ...mp4, base, start: 0 });
+      const extras = domain === Domain.VTS && this.source.extras ? await this.source.extras(base) : null;
+      set.files.push({ ...mp4, base, start: 0, extras });
     }
     for (let i = 1; i < set.files.length; i++) {
       const prev = set.files[i - 1];
@@ -241,6 +257,42 @@ export class Disc {
       }
     });
     return segments;
+  }
+
+  // The audio and subtitle tracks of the title being played, and which of
+  // them `file` (one of the title set's mp4s) can actually provide.
+  tracks(step, file) {
+    const attrs = this.vts[step.vtsN].attrs;
+    const extras = file.extras;
+    const audio = [];
+    step.pgc.audioControl.forEach((control, n) => {
+      const attr = attrs.audio[n];
+      if (!(control & 0x8000) || !attr) return;
+      const id = ((AUDIO_STREAM[attr.format] ?? 0x80) + ((control >> 8) & 7)).toString(16).padStart(2, '0');
+      const url = (extras && extras.audio.get(id)) || null;
+      // Without extras.json all we know is that the mp4 has one of them.
+      const inMp4 = extras && extras.main ? extras.main === id : audio.length === 0;
+      const what = [languageName(attr.lang) || `Track ${n + 1}`, AUDIO_KIND[attr.codeExtension]].filter(Boolean).join(' ');
+      audio.push({ n, id, url, available: inMp4 || !!url, label: `${what} (${AUDIO_FORMAT[attr.format] || attr.format} ${attr.channels}.0)` });
+    });
+    const wide = attrs.video.aspect === '16:9';
+    const subs = [];
+    step.pgc.subpControl.forEach((control, n) => {
+      const attr = attrs.subp[n];
+      if (!(control >>> 31) || !attr) return;
+      const id = 0x20 + ((control >>> (wide ? 16 : 24)) & 0x1f);
+      const what = [languageName(attr.lang) || `Track ${n + 1}`, SUBTITLE_KIND[attr.codeExtension]].filter(Boolean).join(' ');
+      subs.push({ n, id, available: !!(extras && extras.subsUrl), label: what });
+    });
+    // Tell apart tracks that would otherwise read the same ("English", "English").
+    for (const list of [audio, subs]) {
+      list.forEach((track, i) => {
+        const same = list.filter((other) => other.label === track.label);
+        if (same.length > 1) track.name = `${track.label} ${list.slice(0, i + 1).filter((other) => other.label === track.label).length}`;
+      });
+      for (const track of list) track.label = track.name || track.label;
+    }
+    return { audio, subs };
   }
 
   menuState(set, position, time) {

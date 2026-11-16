@@ -3,7 +3,7 @@
 // over the video from the highlight data in the menu VOB.
 
 import { Disc } from './disc.js';
-import { paletteToRgb } from './nav.js';
+import { decodeSpu, paletteToRgb, parseSubtitles } from './nav.js';
 import { Domain, DvdVM } from './vm.js';
 
 const END_EPSILON = 0.02; // a cell is over this close to its end
@@ -13,6 +13,8 @@ const MAX_VIDEOS = 4;
 const MAX_EMPTY_CELLS = 64;
 const ACTION_FLASH = 150; // ms a button shows its "action" colours
 const SKIP = 10; // seconds for the arrow keys
+const AUDIO_DRIFT = 0.2; // seconds a separate audio track may be off the video
+const SUBTITLE_MAX = 20; // seconds a subtitle with no end time stays up
 
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -58,9 +60,16 @@ export class DvdPlayer {
     this.drawn = '';
     this.volume = 1;
     this.muted = false;
+    this.tracks = { audio: [], subs: [] }; // of the title being played
+    this.audioTrack = null; // the one being heard
+    this.altUrl = null; // its file, when it isn't the mp4's own audio
+    this.subTrack = null; // the subtitle track being shown
+    this.subs = null; // its subpicture units, once loaded
+    this.menus = '';
     this.build(container);
     const frame = () => {
       this.tick();
+      this.syncAudio();
       this.draw();
       this.refresh();
       requestAnimationFrame(frame);
@@ -84,7 +93,9 @@ export class DvdPlayer {
     this.banner.append(this.bannerText, this.bannerButton);
     this.note = el('div', 'dvd-note');
     this.note.hidden = true;
-    this.stage.append(this.canvas, this.note, this.banner);
+    this.alt = el('audio'); // plays audio tracks the mp4 doesn't have
+    this.alt.preload = 'auto';
+    this.stage.append(this.canvas, this.note, this.banner, this.alt);
 
     const button = (label, title, onClick) => {
       const b = el('button', null, label);
@@ -114,6 +125,16 @@ export class DvdPlayer {
     ui.where = el('span', 'dvd-where');
     ui.menu = button('Menu', 'Disc menu', () => this.menu());
     ui.resume = button('Resume', 'Back to the title', () => this.resume());
+    const picker = (label, onChange) => {
+      const select = el('select');
+      select.title = label;
+      select.setAttribute('aria-label', label);
+      select.hidden = true;
+      select.addEventListener('change', () => onChange(select.value));
+      return select;
+    };
+    ui.audio = picker('Audio track', (value) => this.setAudioTrack(Number(value)));
+    ui.subs = picker('Subtitles', (value) => this.setSubtitleTrack(value === 'off' ? null : Number(value)));
     ui.mute = button('🔊︎', 'Mute', () => this.setVolume(this.volume, !this.muted));
     ui.volume = el('input', 'dvd-volume');
     ui.volume.type = 'range';
@@ -125,7 +146,7 @@ export class DvdPlayer {
     ui.volume.addEventListener('input', () => this.setVolume(Number(ui.volume.value), false));
     ui.full = button('⛶', 'Full screen', () => this.toggleFullscreen());
     this.controls = el('div', 'dvd-controls');
-    this.controls.append(ui.prev, ui.play, ui.next, ui.seek, ui.time, ui.where, ui.menu, ui.resume, ui.mute, ui.volume, ui.full);
+    this.controls.append(ui.prev, ui.play, ui.next, ui.seek, ui.time, ui.where, ui.menu, ui.resume, ui.audio, ui.subs, ui.mute, ui.volume, ui.full);
 
     this.root.append(this.stage, this.controls);
     container.append(this.root);
@@ -183,6 +204,7 @@ export class DvdPlayer {
     this.step = null;
     this.segments = [];
     for (const video of this.videos.values()) video.pause();
+    this.applyTracks();
   }
 
   // Run a VM entry point and play whatever it settles on. Returns false if the
@@ -255,6 +277,7 @@ export class DvdPlayer {
     const carryOn = video === this.video && !video.paused && !video.seeking && Math.abs(video.currentTime - target) < SEAMLESS;
     if (!carryOn) video.currentTime = target;
     this.show(video);
+    this.applyTracks();
     if (!this.paused) this.resumeVideo(video);
   }
 
@@ -442,8 +465,141 @@ export class DvdPlayer {
     this.muted = muted;
     for (const video of this.videos.values()) {
       video.volume = volume;
-      video.muted = muted;
+      video.muted = muted || !!this.altUrl; // another track is playing instead
     }
+    this.alt.volume = volume;
+    this.alt.muted = muted;
+  }
+
+  // ---- audio tracks and subtitles --------------------------------------------
+
+  // Work out which audio and subtitles go with the piece of video now playing.
+  applyTracks() {
+    const seg = this.segments[this.segment];
+    this.tracks = this.inTitle && seg ? this.disc.tracks(this.step, seg.file) : { audio: [], subs: [] };
+    const { audio, subs } = this.tracks;
+    // What the disc or the viewer chose, else the first one there is a file for.
+    this.audioTrack = audio.find((t) => t.n === this.vm.audioTrack && t.available) || audio.find((t) => t.available) || null;
+    const url = (this.audioTrack && this.audioTrack.url) || null;
+    if (url !== this.altUrl) {
+      this.altUrl = url;
+      this.alt.pause();
+      if (url) this.alt.src = url;
+      else this.alt.removeAttribute('src');
+      this.alt.load();
+    }
+    this.subTrack = subs.find((t) => t.n === this.vm.subtitleTrack && t.available) || null;
+    this.subs = null;
+    this.drawn = '';
+    if (this.subTrack) {
+      const { file } = seg;
+      const { id } = this.subTrack;
+      file.subs ??= fetch(file.extras.subsUrl)
+        .then((res) => (res.ok ? res.arrayBuffer() : Promise.reject(new Error(`${res.status} for ${res.url}`))))
+        .then((buf) => parseSubtitles(new Uint8Array(buf)))
+        .catch((err) => {
+          console.warn('dvd.js: could not load subtitles:', err);
+          return new Map();
+        });
+      file.subs.then((streams) => {
+        const now = this.segments[this.segment];
+        if (now && now.file === file && this.subTrack && this.subTrack.id === id) this.subs = streams.get(id) || [];
+      });
+    }
+    this.fillPickers();
+    this.setVolume(this.volume, this.muted);
+  }
+
+  fillPickers() {
+    const { audio, subs } = this.tracks;
+    const key = JSON.stringify([audio.map((t) => [t.n, t.label, t.available]), subs.map((t) => [t.n, t.label, t.available])]);
+    if (key !== this.menus) {
+      this.menus = key;
+      const fill = (select, options) => {
+        select.replaceChildren(
+          ...options.map(([value, label, available]) => {
+            const option = el('option', null, label);
+            option.value = String(value);
+            option.disabled = !available;
+            return option;
+          })
+        );
+      };
+      fill(this.ui.audio, audio.map((t) => [t.n, `Audio: ${t.label}${t.available ? '' : ' (not available)'}`, t.available]));
+      fill(this.ui.subs, [['off', 'Subtitles: off', true], ...subs.map((t) => [t.n, `Subtitles: ${t.label}${t.available ? '' : ' (not available)'}`, t.available])]);
+      this.ui.audio.hidden = audio.length < 2;
+      this.ui.subs.hidden = !subs.length;
+    }
+    if (this.audioTrack) this.ui.audio.value = String(this.audioTrack.n);
+    this.ui.subs.value = this.subTrack ? String(this.subTrack.n) : 'off';
+  }
+
+  setAudioTrack(n) {
+    this.vm.audioTrack = n;
+    this.applyTracks();
+  }
+
+  setSubtitleTrack(n) {
+    this.vm.subtitleTrack = n;
+    this.applyTracks();
+  }
+
+  // Step to the next audio track, or the next subtitle track (then off).
+  cycle(kind) {
+    const list = this.tracks[kind].filter((t) => t.available);
+    if (kind === 'audio') {
+      if (list.length < 2) return;
+      this.setAudioTrack(list[(list.indexOf(this.audioTrack) + 1) % list.length].n);
+    } else if (list.length) {
+      const next = list[list.indexOf(this.subTrack) + 1];
+      this.setSubtitleTrack(next ? next.n : null);
+    }
+  }
+
+  // Keep the separate audio track in step with the video.
+  syncAudio() {
+    const video = this.current;
+    const alt = this.alt;
+    if (!this.altUrl || !video) return;
+    const playing = !video.paused && !video.seeking && video.readyState >= 3;
+    if (!alt.seeking && Math.abs(alt.currentTime - video.currentTime) > AUDIO_DRIFT) alt.currentTime = video.currentTime;
+    if (playing && alt.paused) alt.play().catch(() => {});
+    if (!playing && !alt.paused) alt.pause();
+  }
+
+  // The subtitle to show now, or null.
+  subtitleAt() {
+    if (!this.subs || !this.video || this.incoming) return null;
+    const time = this.video.currentTime;
+    let found = -1;
+    for (let lo = 0, hi = this.subs.length - 1; lo <= hi; ) {
+      const mid = (lo + hi) >> 1;
+      if (this.subs[mid].time <= time) {
+        found = mid;
+        lo = mid + 1;
+      } else {
+        hi = mid - 1;
+      }
+    }
+    if (found < 0) return null;
+    const unit = this.subs[found];
+    unit.spu ??= decodeSpu(unit.data);
+    const { spu } = unit;
+    if (!spu.pixels) return null;
+    const start = unit.time + spu.startDelay / 90000;
+    const stop = unit.time + (spu.stopDelay === null ? SUBTITLE_MAX : spu.stopDelay / 90000);
+    return time >= start && time < stop ? unit : null;
+  }
+
+  drawSubtitle({ spu }) {
+    const palette = this.step.pgc.palette;
+    const rgba = [0, 1, 2, 3].map((v) => [...paletteToRgb(palette[spu.palette[v]]), Math.round((spu.alpha[v] * 255) / 15)]);
+    const image = this.ctx.createImageData(spu.width, spu.height);
+    for (let i = 0; i < spu.pixels.length; i++) {
+      const colour = rgba[spu.pixels[i]];
+      if (colour[3]) image.data.set(colour, i * 4);
+    }
+    this.ctx.putImageData(image, spu.x1, spu.y1);
   }
 
   toggleFullscreen() {
@@ -502,14 +658,17 @@ export class DvdPlayer {
 
   draw() {
     const state = this.buttons();
+    const subtitle = state ? null : this.subtitleAt();
     const n = state ? this.vm.highlightedButton : 0;
     const mode = this.flash === n ? 'action' : 'select';
-    const key = state ? `${this.step.pgcN}/${this.step.cellN}/${state.hli.startPtm}/${n}/${mode}/${state.spu ? state.spu.pixels.length : 0}` : '';
+    let key = subtitle ? `subtitle/${this.subTrack.id}/${subtitle.time}` : '';
+    if (state) key = `${this.step.pgcN}/${this.step.cellN}/${state.hli.startPtm}/${n}/${mode}/${state.spu ? state.spu.pixels.length : 0}`;
     if (key === this.drawn) return;
     this.drawn = key;
     const { ctx, canvas } = this;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     this.canvas.style.cursor = '';
+    if (subtitle) this.drawSubtitle(subtitle);
     if (!state) return;
     const button = state.hli.buttons[n - 1];
     const coli = state.hli.colors[button.colorN - 1]?.[mode] ?? 0;
@@ -585,7 +744,7 @@ export class DvdPlayer {
   }
 
   key(event) {
-    if (event.target instanceof HTMLInputElement || event.metaKey || event.ctrlKey || event.altKey) return;
+    if (event.target instanceof HTMLInputElement || event.target instanceof HTMLSelectElement || event.metaKey || event.ctrlKey || event.altKey) return;
     if (event.target instanceof HTMLButtonElement && (event.key === 'Enter' || event.key === ' ')) return;
     const state = this.buttons();
     const arrow = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right' }[event.key];
@@ -599,6 +758,10 @@ export class DvdPlayer {
       this.togglePause();
     } else if (event.key === 'm') {
       this.menu();
+    } else if (event.key === 'a') {
+      this.cycle('audio');
+    } else if (event.key === 's') {
+      this.cycle('subs');
     } else if (event.key === 'f') {
       this.toggleFullscreen();
     } else {

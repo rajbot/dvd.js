@@ -130,7 +130,7 @@ export class VobScanner {
     if (!isStartCode(u8, off, 0xba)) return;
     const nav = parseNavPack(u8, off);
     if (nav) {
-      this.vobus.push({ sector, hasVideo: false, hasAudio: false, ...nav });
+      this.vobus.push({ sector, hasVideo: false, hasAudio: false, audio: [], ...nav });
       return;
     }
     const vobu = this.vobus[this.vobus.length - 1];
@@ -138,13 +138,17 @@ export class VobScanner {
     if (u8[p] !== 0 || u8[p + 1] !== 0 || u8[p + 2] !== 1) return;
     const id = u8[p + 3];
     if (vobu && id >= 0xe0 && id <= 0xef) vobu.hasVideo = true;
-    if (vobu && id >= 0xc0 && id <= 0xdf) vobu.hasAudio = true;
+    const heard = (stream) => {
+      vobu.hasAudio = true;
+      if (!vobu.audio.includes(stream)) vobu.audio.push(stream);
+    };
+    if (vobu && id >= 0xc0 && id <= 0xdf) heard(id); // MPEG audio
     if (id !== 0xbd) return;
     const end = Math.min(p + 6 + ((u8[p + 4] << 8) | u8[p + 5]), off + SECTOR);
     const pts = u8[p + 7] & 0x80 ? parsePts(u8, p + 9) : null;
     p += 9 + u8[p + 8];
     const stream = u8[p++];
-    if (vobu && stream >= 0x80 && stream <= 0xa7) vobu.hasAudio = true; // AC-3, DTS, LPCM
+    if (vobu && stream >= 0x80 && stream <= 0xa7) heard(stream); // AC-3, DTS, LPCM
     if (stream < 0x20 || stream > 0x3f) return;
     let cur = this.partial.get(stream);
     if (!cur) {
@@ -283,6 +287,27 @@ export function decodeSpu(data) {
   decodeField(bottom, 1);
   spu.pixels = pixels;
   return spu;
+}
+
+// Subtitle sidecar made by tools/make-derivatives.mjs: the subpicture units
+// of one title VOB, timed against its mp4. "DVDJSSP1", then for each unit:
+// stream id (u8), start in ms (u32), length (u16), the unit.
+export const SUBTITLE_MAGIC = 'DVDJSSP1';
+
+export function parseSubtitles(u8) {
+  if (String.fromCharCode(...u8.subarray(0, 8)) !== SUBTITLE_MAGIC) throw new Error('Not a dvd.js subtitle file');
+  const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
+  const streams = new Map(); // stream id -> [{ time, data }], by time
+  for (let p = 8; p + 7 <= u8.length; ) {
+    const stream = dv.getUint8(p);
+    const time = dv.getUint32(p + 1) / 1000;
+    const length = dv.getUint16(p + 5);
+    if (!streams.has(stream)) streams.set(stream, []);
+    streams.get(stream).push({ time, data: u8.subarray(p + 7, p + 7 + length) });
+    p += 7 + length;
+  }
+  for (const units of streams.values()) units.sort((a, b) => a.time - b.time);
+  return streams;
 }
 
 // PGC palette entry (Y, Cr, Cb) -> [r, g, b]

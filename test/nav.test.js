@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { VobScanner, decodeSpu, isNavPack, paletteToRgb } from '../src/nav.js';
+import { SUBTITLE_MAGIC, VobScanner, decodeSpu, isNavPack, paletteToRgb, parseSubtitles } from '../src/nav.js';
 
 const SECTOR = 2048;
 
@@ -99,4 +99,21 @@ test('VobScanner finds VOBUs, buttons and subpictures across chunk boundaries', 
 test('paletteToRgb converts video-range YCrCb', () => {
   assert.deepEqual(paletteToRgb({ y: 16, cr: 128, cb: 128 }), [0, 0, 0]);
   assert.deepEqual(paletteToRgb({ y: 235, cr: 128, cb: 128 }), [255, 255, 255]);
+});
+
+test('parseSubtitles groups a sidecar file by stream, in time order', () => {
+  const unit = (stream, ms, bytes) => {
+    const head = new Uint8Array(7);
+    const dv = new DataView(head.buffer);
+    dv.setUint8(0, stream);
+    dv.setUint32(1, ms);
+    dv.setUint16(5, bytes.length);
+    return [...head, ...bytes];
+  };
+  const file = Uint8Array.from([...SUBTITLE_MAGIC].map((c) => c.charCodeAt(0)).concat(unit(0x20, 2500, [1, 2, 3]), unit(0x21, 100, [9]), unit(0x20, 1000, [4, 5])));
+  const streams = parseSubtitles(file);
+  assert.deepEqual([...streams.keys()], [0x20, 0x21]);
+  assert.deepEqual(streams.get(0x20).map((u) => [u.time, [...u.data]]), [[1, [4, 5]], [2.5, [1, 2, 3]]]);
+  assert.deepEqual(streams.get(0x21).map((u) => [u.time, [...u.data]]), [[0.1, [9]]]);
+  assert.throws(() => parseSubtitles(new Uint8Array(16)), /subtitle file/);
 });
