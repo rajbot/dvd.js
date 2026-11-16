@@ -49,3 +49,18 @@ test('extras come from the extras.json beside the mp4', async (t) => {
   await s.extras('VTS_01_1');
   assert.equal(fetched.length, 1);
 });
+
+test("a VOB's nav file is found in any item, in the disc's own directory", async (t) => {
+  // The disc's item has the mp4; the nav file was only added to the second item.
+  const s = source([file('Disc 2/VTS_01_0.mp4', 'derivative')]);
+  s.mp4Items.push({ identifier: 'extra', files: [file('Disc 1/VTS_01_0.nav.bin'), file('Disc 2/VTS_01_0.nav.bin')] });
+  const fetched = [];
+  t.mock.method(globalThis, 'fetch', async (url) => {
+    fetched.push(url);
+    return { ok: true, body: 'stream' };
+  });
+  assert.equal(await s.openNav('VTS_01_0'), 'stream');
+  assert.deepEqual(fetched, ['https://archive.org/cors/extra/Disc%202/VTS_01_0.nav.bin']);
+  assert.equal(await s.openNav('VTS_02_1'), null);
+  assert.equal(fetched.length, 1);
+});

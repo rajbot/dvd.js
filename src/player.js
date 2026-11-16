@@ -71,6 +71,7 @@ export class DvdPlayer {
     this.subTrack = null; // the subtitle track the viewer switched on
     this.subStream = null; // { id, forcedOnly } of the subtitles being drawn
     this.subs = null; // its subpicture units, once loaded
+    this.buttonStream = null; // id of the subpicture stream a title's buttons are lit on
     this.menus = '';
     this.build(container);
     const frame = () => {
@@ -248,6 +249,7 @@ export class DvdPlayer {
         return;
       }
       const set = this.disc.setFor(step);
+      if (set) this.disc.scanTitle(set);
       const segments = set ? this.disc.segments(set, step.position) : [];
       if (segments.length) {
         this.playCell(step, set, segments);
@@ -473,7 +475,12 @@ export class DvdPlayer {
     const time = this.cellTime();
     // From inside a menu, a root menu that goes nowhere means "stay here",
     // not "try the title menu".
-    const stay = this.vm.inMenu && this.vm.findMenu(Domain.VTSM, 3);
+    let stay = false;
+    try {
+      stay = this.vm.inMenu && !!this.vm.findMenu(Domain.VTSM, 3);
+    } catch {
+      // no title set to have a root menu
+    }
     const found = this.go(() => this.vm.menuCall(3, time)) || (!stay && this.go(() => this.vm.menuCall(2, time)));
     if (!found && !this.vm.inMenu) this.notice('This disc has no menu.');
   }
@@ -520,6 +527,10 @@ export class DvdPlayer {
     const fallback = subs.find((t) => t.n === this.vm.subtitleStream && t.available) || subs.find((t) => t.available);
     const shown = this.subTrack || fallback;
     this.subStream = shown ? { id: shown.id, forcedOnly: !this.subTrack } : null;
+    // Buttons over a title are highlighted on the subpicture stream the disc
+    // has selected, whether or not there is a subtitle file for it.
+    const selected = subs.find((t) => t.n === this.vm.subtitleStream) || subs[0];
+    this.buttonStream = this.inTitle ? (selected ? selected.id : -1) : null;
     this.subs = null;
     this.drawn = null;
     if (this.subStream) {
@@ -740,7 +751,7 @@ export class DvdPlayer {
   buttons() {
     const seg = this.segments[this.segment];
     if (!this.step || !seg || this.incoming || !this.video) return null;
-    const state = this.disc.menuState(this.set, this.step.position, seg.file.start + this.video.currentTime);
+    const state = this.disc.menuState(this.set, this.step.position, seg.file.start + this.video.currentTime, this.inTitle ? this.buttonStream : null);
     if (!state) return null;
     const { hli } = state;
     if (hli !== this.lastHli) {
@@ -802,8 +813,18 @@ export class DvdPlayer {
         visible = true;
       }
     }
-    if (visible) this.ctx.putImageData(image, x1, y1);
+    if (visible) this.paint(image, x1, y1);
     return visible;
+  }
+
+  // Draw `image` over what is on the canvas. (putImageData would replace it,
+  // transparent pixels included.)
+  paint(image, x, y) {
+    const scratch = (this.scratch ??= document.createElement('canvas'));
+    scratch.width = image.width;
+    scratch.height = image.height;
+    scratch.getContext('2d').putImageData(image, 0, 0);
+    this.ctx.drawImage(scratch, x, y);
   }
 
   select(n) {
@@ -852,8 +873,13 @@ export class DvdPlayer {
     if (event.target instanceof HTMLButtonElement && (event.key === 'Enter' || event.key === ' ')) return;
     const state = this.buttons();
     const arrow = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right' }[event.key];
-    if (arrow && state) {
-      this.select(state.hli.buttons[this.vm.highlightedButton - 1][arrow]);
+    const target = arrow && state ? state.hli.buttons[this.vm.highlightedButton - 1][arrow] : 0;
+    // Over a title, an arrow that has no other button to go to keeps its
+    // usual job (seeking), so a lone or hidden button doesn't take the keys.
+    if (target && !(this.inTitle && target === this.vm.highlightedButton)) {
+      this.select(target);
+    } else if (arrow && state && !this.inTitle) {
+      // a menu button with nowhere to go in that direction
     } else if (event.key === 'Enter' && state) {
       this.activate();
     } else if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {

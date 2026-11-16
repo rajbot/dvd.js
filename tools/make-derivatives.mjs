@@ -32,7 +32,7 @@
 // Requires ffmpeg, and 7z or bsdtar when given a disc image.
 
 import { spawnSync } from 'node:child_process';
-import { closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs';
+import { closeSync, copyFileSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { SECTOR, audioStreamId, parseVMG, parseVTS } from '../src/ifo.js';
@@ -68,17 +68,32 @@ class VobSet {
     this.sectors = start;
   }
 
-  scan() {
+  // Scan the set. Its NAV packs and subpicture packs are copied to `navPath`
+  // on the way: everything the player reads from the VOBs (the buttons and
+  // their highlights) without the video and audio, so it doesn't have to
+  // download the VOBs to find them. Returns the scanner and the copy's size.
+  scan(navPath) {
     const scanner = new VobScanner();
     const buf = Buffer.alloc(CHUNK);
+    const nav = openSync(navPath, 'w');
+    let navBytes = 0;
     for (const file of this.files) {
       const fd = openSync(file.path, 'r');
-      for (let pos = 0, n; (n = readSync(fd, buf, 0, CHUNK, pos)) > 0; pos += n) {
-        scanner.push(new Uint8Array(buf.buffer, buf.byteOffset, n));
+      for (let pos = 0; pos < file.sectors * SECTOR; ) {
+        // whole sectors only, so a short read can't shift the ones after it
+        const n = readSync(fd, buf, 0, Math.min(CHUNK, file.sectors * SECTOR - pos), pos);
+        const whole = n - (n % SECTOR);
+        if (!whole) throw new Error(`${file.name}: read stopped at byte ${pos}`);
+        scanner.push(new Uint8Array(buf.buffer, buf.byteOffset, whole));
+        for (let off = 0; off < whole; off += SECTOR) {
+          if (isNavPack(buf, off) || isSubpicturePack(buf, off)) navBytes += writeSync(nav, buf, off, SECTOR);
+        }
+        pos += whole;
       }
       closeSync(fd);
     }
-    return scanner;
+    closeSync(nav);
+    return { scanner, navBytes };
   }
 
   // Copy sectors [from, to) of the set into `dest`.
@@ -307,26 +322,6 @@ function subtitleFile(scanner, file) {
   return chunks.length > 1 ? Buffer.concat(chunks) : null;
 }
 
-// The NAV packs and subpicture packs of a VOB set, in order: everything the
-// player reads from it (the buttons and their highlights) without the video
-// and audio, so it doesn't have to download the VOBs to find them.
-function navFile(set, dest) {
-  const out = openSync(dest, 'w');
-  const buf = Buffer.alloc(CHUNK);
-  let bytes = 0;
-  for (const file of set.files) {
-    const fd = openSync(file.path, 'r');
-    for (let pos = 0, n; (n = readSync(fd, buf, 0, CHUNK, pos)) > 0; pos += n) {
-      for (let off = 0; off + SECTOR <= n; off += SECTOR) {
-        if (isNavPack(buf, off) || isSubpicturePack(buf, off)) bytes += writeSync(out, buf, off, SECTOR);
-      }
-    }
-    closeSync(fd);
-  }
-  closeSync(out);
-  return bytes;
-}
-
 function main() {
   const flags = process.argv.slice(2).filter((a) => a.startsWith('--'));
   const extrasOnly = flags.includes('--extras-only');
@@ -355,14 +350,15 @@ function main() {
     const manifest = {};
     for (const { names: vobNames, video, title, firstAudio } of sets) {
       const set = new VobSet(dir, vobNames);
-      const scanner = set.scan();
+      const nav = set.files[0].name.replace(/\.VOB$/, '.nav.bin');
+      const { scanner, navBytes } = set.scan(join(tmp, nav));
       const runs = findRuns(scanner.vobus, set);
       // Menus always get a nav file; titles only if they put buttons over the video.
       if (runs.some(inMp4) && (!title || scanner.vobus.some((vobu) => vobu.pci.hli.status && vobu.pci.hli.btnNs))) {
-        const nav = set.files[0].name.replace(/\.VOB$/, '.nav.bin');
-        const bytes = navFile(set, join(out, nav));
-        process.stderr.write(`${vobNames.join(' ')}: buttons -> ${nav} (${bytes} bytes)\n`);
+        copyFileSync(join(tmp, nav), join(out, nav));
+        process.stderr.write(`${vobNames.join(' ')}: buttons -> ${nav} (${navBytes} bytes)\n`);
       }
+      rmSync(join(tmp, nav));
       set.files.forEach((file, i) => {
         const mine = runs.filter((r) => r.file === i);
         const name = file.name.replace(/\.VOB$/, '.mp4');

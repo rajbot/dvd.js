@@ -146,7 +146,7 @@ export class DvdVM {
   // `time` is how far into the current cell a title is, so that a button
   // over the video that calls a menu can be resumed from where it was.
   activateButton(cmd, time = null) {
-    this.callTime = time;
+    this.callTime = time === null ? null : { time, pgc: this.pgc, cellN: this.cellN };
     try {
       const link = this.evalCommands([cmd]);
       if (!link) return null;
@@ -166,14 +166,19 @@ export class DvdVM {
     if (!this.findMenu(domain, menuId)) return null;
     const { gprm, sprm, vtsN, pgc, pgcN, pgN, cellN, rsm, stopped } = this;
     const before = { gprm: gprm.slice(), sprm: sprm.slice(), domain: this.domain, vtsN, pgc, pgcN, pgN, cellN, rsm, stopped };
-    if (fromTitle) {
-      this.saveResume(this.cellN);
-      this.rsm.time = time;
+    try {
+      if (fromTitle) {
+        this.saveResume(this.cellN);
+        this.rsm.time = time;
+      }
+      this.domain = domain;
+      this.setMenu(menuId);
+      const step = this.run(this.playPGC());
+      if (step.type !== 'stop') return step;
+    } catch (err) {
+      Object.assign(this, before);
+      throw err;
     }
-    this.domain = domain;
-    this.setMenu(menuId);
-    const step = this.run(this.playPGC());
-    if (step.type !== 'stop') return step;
     // Some discs' menu entries only make sense from where the disc expects
     // them and otherwise run off the end: stay where we were instead.
     Object.assign(this, before);
@@ -277,13 +282,16 @@ export class DvdVM {
   }
 
   saveResume(cellN) {
+    // A button's time only means something in the cell it was pressed in.
+    const call = this.callTime;
+    const there = call && call.pgc === this.pgc && (cellN || this.cellN) === call.cellN;
     this.rsm = {
       vtsN: this.vtsN,
       pgcN: this.pgcN,
       pgN: this.pgN,
       cellN: cellN || this.cellN,
       regs: [this.sprm[TTN], this.sprm[VTS_TTN], this.sprm[TT_PGCN], this.sprm[PTTN], this.sprm[HL_BTNN]],
-      time: !cellN || cellN === this.cellN ? this.callTime ?? null : null, // seconds into the cell, when the player knows
+      time: there ? call.time : null, // seconds into the cell, when the player knows
     };
   }
 

@@ -43,7 +43,7 @@ export class MenuScan {
   constructor() {
     this.scanner = new VobScanner();
     this.timed = 0; // VOBUs that have been given a time
-    this.cells = new Map(); // "vobId:cellId" -> index of the cell's first VOBU
+    this.cells = new Map(); // "vobId:cellId" -> { first, last } VOBU indexes of the cell
     this.complete = false;
     this.error = null;
     this.decoded = new WeakMap();
@@ -76,7 +76,9 @@ export class MenuScan {
       vobu.time = prev ? prev.time + prev.duration : 0;
       vobu.duration = Math.max(0, vobu.pci.endPtm - vobu.pci.startPtm) / 90000;
       const key = cellKey(vobu.dsi);
-      if (!this.cells.has(key)) this.cells.set(key, this.timed);
+      const range = this.cells.get(key);
+      if (!range) this.cells.set(key, { first: this.timed, last: this.timed });
+      else if (range.last === this.timed - 1) range.last = this.timed;
     }
   }
 
@@ -84,42 +86,56 @@ export class MenuScan {
   // the scan has got past the cell.
   cellSpan(key) {
     const vobus = this.scanner.vobus;
-    const first = this.cells.get(key);
-    if (first === undefined) return null;
-    let i = first;
-    while (i < this.timed && cellKey(vobus[i].dsi) === key) i++;
+    const range = this.cells.get(key);
+    if (!range) return null;
+    const next = range.last + 1;
     const last = vobus[this.timed - 1];
     let end = null;
-    if (i < this.timed) end = vobus[i].time;
+    if (next < this.timed) end = vobus[next].time;
     else if (this.complete) end = last.time + last.duration;
-    return { start: vobus[first].time, end };
+    return { start: vobus[range.first].time, end };
   }
 
   // Buttons and highlight subpicture in force at `time` within a cell.
-  stateAt(key, time) {
+  // `stream` is the id of the subpicture stream the disc has selected; without
+  // one (menus) the highlight comes from the VOB's first subpicture stream.
+  // The highlight shows whether or not that stream's subtitles are switched
+  // on, as on a player: discs don't mark their button pictures as forced.
+  stateAt(key, time, stream = null) {
     const vobus = this.scanner.vobus;
-    const first = this.cells.get(key);
-    if (first === undefined) return null;
-    let i = first;
-    while (i + 1 < this.timed && cellKey(vobus[i + 1].dsi) === key && vobus[i + 1].time <= time) i++;
-    const at = i;
+    const range = this.cells.get(key);
+    if (!range) return null;
+    // the cell's last VOBU that starts at or before `time`
+    let lo = range.first;
+    let hi = range.last;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (vobus[mid].time <= time) lo = mid;
+      else hi = mid - 1;
+    }
+    const at = lo;
+    let i = at;
     // "use the previous VOBU's highlight information"
-    while (i > first && vobus[i].pci.hli.status >= 2 && !vobus[i].pci.hli.buttons.length) i--;
+    while (i > range.first && vobus[i].pci.hli.status >= 2 && !vobus[i].pci.hli.buttons.length) i--;
     const hli = vobus[i].pci.hli;
     if (!hli.status || !hli.buttons.length) return null;
-    return { hli, spu: this.spuAt(key, at) };
+    return { hli, spu: this.spuAt(range, at, stream) };
   }
 
-  spuAt(key, vobuIndex) {
-    const streams = [...this.scanner.spus.keys()].sort((a, b) => a - b);
-    if (!streams.length) return null;
-    const vobus = this.scanner.vobus;
-    let found = null;
-    for (const unit of this.scanner.spus.get(streams[0])) {
-      if (unit.vobu > vobuIndex) break;
-      if (unit.vobu >= 0 && cellKey(vobus[unit.vobu].dsi) === key) found = unit;
+  // The cell's latest subpicture at or before VOBU `vobuIndex`.
+  spuAt(range, vobuIndex, stream) {
+    const id = stream ?? Math.min(...this.scanner.spus.keys());
+    const units = this.scanner.spus.get(id);
+    if (!units) return null;
+    let lo = 0;
+    let hi = units.length; // units are in VOBU order: count those up to vobuIndex
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (units[mid].vobu <= vobuIndex) lo = mid + 1;
+      else hi = mid;
     }
-    if (!found) return null;
+    const found = units[lo - 1];
+    if (!found || found.vobu < range.first) return null;
     if (!this.decoded.has(found)) this.decoded.set(found, decodeSpu(found.data));
     const spu = this.decoded.get(found);
     return spu.pixels ? spu : null;
@@ -218,34 +234,41 @@ export class Disc {
     }
   }
 
+  // A VOB set's buttons as a file of their own, if someone made one.
+  openNav(base) {
+    return this.source.openNav ? this.source.openNav(base).catch(() => null) : Promise.resolve(null);
+  }
+
   // Start reading the menu VOBs. Nothing waits for this: the menus play as
   // soon as their mp4 does, and the buttons appear once the scan reaches them.
   scanMenus(maxBytes) {
+    this.maxScanBytes = maxBytes;
     for (const set of this.sets.values()) {
-      // A menu VOB can be hundreds of megabytes; its buttons are a few of
-      // them, and may have been put in a file of their own.
-      const base = set.menuVob ? set.menuVob.replace(/\.VOB$/, '') : set.files[0]?.base;
-      const nav = base && this.source.openNav ? this.source.openNav(base).catch(() => null) : Promise.resolve(null);
-      if (set.menuVob) {
-        set.scan = new MenuScan();
-        nav
-          .then((stream) => stream || this.source.openStream(set.menuVob))
-          .then((stream) => set.scan.run(stream, maxBytes))
-          .catch((err) => {
-            set.scan.error = err;
-          });
-      } else {
-        // Title VOBs are too big to read, so a title's buttons over the
-        // video only work when there is such a file.
-        nav.then((stream) => {
-          if (!stream) return;
-          const scan = new MenuScan();
-          scan.run(stream, maxBytes).then(() => {
-            set.scan = scan;
-          }, () => {});
+      if (!set.menuVob) continue;
+      set.scan = new MenuScan();
+      // A menu VOB can be hundreds of megabytes; its buttons are a few of them.
+      this.openNav(set.menuVob.replace(/\.VOB$/, ''))
+        .then((stream) => stream || this.source.openStream(set.menuVob))
+        .then((stream) => set.scan.run(stream, maxBytes))
+        .catch((err) => {
+          set.scan.error = err;
         });
-      }
     }
+  }
+
+  // Start reading a title set's buttons, the first time one of its titles
+  // plays. Title VOBs are too big to read, so buttons over a title's video
+  // only work when the set has a nav file.
+  scanTitle(set) {
+    if (set.menuVob || set.navRequested || !set.files.length) return;
+    set.navRequested = true;
+    this.openNav(set.files[0].base).then((stream) => {
+      if (!stream) return;
+      set.scan = new MenuScan();
+      set.scan.run(stream, this.maxScanBytes).catch((err) => {
+        set.scan.error = err;
+      });
+    });
   }
 
   setFor(step) {
@@ -257,7 +280,9 @@ export class Disc {
   cellSpan(set, position) {
     const key = cellKey(position);
     const fromIfo = set.cells.get(key);
-    const scanned = set.scan && set.scan.cellSpan(key);
+    // Only menus are timed by their scan: a title's mp4 follows the IFO, and
+    // its scan is there for the buttons alone.
+    const scanned = set.menuVob && set.scan && set.scan.cellSpan(key);
     if (!scanned) return fromIfo || null;
     const length = fromIfo ? fromIfo.end - fromIfo.start : 0;
     return { start: scanned.start, end: scanned.end ?? scanned.start + length };
@@ -318,7 +343,7 @@ export class Disc {
     return { audio, subs };
   }
 
-  menuState(set, position, time) {
-    return set.scan ? set.scan.stateAt(cellKey(position), time) : null;
+  menuState(set, position, time, stream = null) {
+    return set.scan ? set.scan.stateAt(cellKey(position), time, stream) : null;
   }
 }

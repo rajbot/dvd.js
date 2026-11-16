@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { MenuScan } from '../src/disc.js';
 import { SUBTITLE_MAGIC, VobScanner, decodeSpu, isNavPack, isSubpicturePack, paletteToRgb, parseSubtitles } from '../src/nav.js';
 
 const SECTOR = 2048;
@@ -116,6 +117,33 @@ test('the NAV and subpicture packs alone scan to the same buttons and highlights
     };
   };
   assert.deepEqual(scan(packs.filter((p) => isNavPack(p) || isSubpicturePack(p))), scan(packs));
+});
+
+test('MenuScan picks the buttons by time and the highlight by stream, cell by cell', () => {
+  const button = { x1: 100, x2: 200, y1: 50, y2: 90, up: 1, down: 1, left: 1, right: 1, cmd: [0, 0, 0, 0, 0, 0, 0, 0] };
+  const half = 45000; // 0.5 s VOBUs
+  const packs = [
+    navPack({ startPtm: 0, endPtm: half, vobId: 1, cellId: 1 }),
+    pesPack(0xbd, spuUnit(), 0x20), // a subtitle in cell 1
+    navPack({ startPtm: half, endPtm: 2 * half, vobId: 1, cellId: 2 }),
+    navPack({ startPtm: 2 * half, endPtm: 3 * half, vobId: 1, cellId: 2, buttons: [button] }),
+    pesPack(0xbd, spuUnit(), 0x21), // the button picture, on the second stream
+    navPack({ startPtm: 3 * half, endPtm: 4 * half, vobId: 1, cellId: 3 }),
+  ];
+  const scan = new MenuScan();
+  for (const p of packs) scan.push(p);
+  scan.complete = true;
+  assert.deepEqual(scan.cellSpan('1:2'), { start: 0.5, end: 1.5 });
+  assert.equal(scan.stateAt('1:2', 0.7), null); // no buttons yet
+  // Stream 0x20 has nothing in this cell (its only unit belongs to cell 1).
+  assert.equal(scan.stateAt('1:2', 1.2).spu, null);
+  assert.equal(scan.stateAt('1:2', 1.2, 0x20).spu, null);
+  const state = scan.stateAt('1:2', 1.2, 0x21);
+  assert.equal(state.hli.buttons.length, 1);
+  assert.equal(state.spu.width, 4);
+  // past the end of the cell it stays on the cell's last VOBU
+  assert.equal(scan.stateAt('1:2', 99, 0x21).hli.buttons.length, 1);
+  assert.equal(scan.stateAt('1:3', 1.7, 0x21), null);
 });
 
 test('paletteToRgb converts video-range YCrCb', () => {

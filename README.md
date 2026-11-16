@@ -68,7 +68,12 @@ Titles can have buttons over the video too (a choice of what to watch next, a
 hidden extra). The player never reads title VOBs, so those buttons only work
 from a nav file: the tool writes one for each title set that has buttons,
 covering all of the set's VOBs and named after the first
-(`VTS_09_1.nav.bin`).
+(`VTS_09_1.nav.bin`). It is fetched when a title of that set first plays.
+While such buttons are up, an arrow key that has another button to go to
+moves the highlight; otherwise the left and right arrows still seek.
+
+A nav file is made from the VOB alone, so it can sit in either item (the
+disc's own or the `&mp4item=` one), whichever mp4 is being played.
 
 ### Audio tracks and subtitles
 

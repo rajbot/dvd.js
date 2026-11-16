@@ -119,15 +119,15 @@ export class ArchiveSource {
     return { url: this.fileUrl(file.name, item.identifier), duration: parseLength(file.length), derivative: file.source === 'derivative' };
   }
 
-  // The buttons of the menu VOB `base` as a small file of their own
-  // (<base>.nav.bin, beside its mp4), or null if the item has none and the
-  // VOB itself has to be read.
+  // The buttons of <base>.VOB as a small file of their own (<base>.nav.bin),
+  // or null if no item has one and the VOB itself has to be read. Unlike the
+  // extras it is made from the VOB alone, so it goes with any mp4.
   async openNav(base, signal) {
-    const picked = this.pick(base);
-    if (!picked) return null;
-    const name = picked.file.name.replace(/\.mp4$/i, '.nav.bin');
-    if (!picked.item.files.some((f) => f.name === name)) return null;
-    return (await get(this.corsUrl(name, picked.item.identifier), signal)).body;
+    for (const item of this.mp4Items) {
+      const [file] = this.named(item.files, `${base}.nav.bin`);
+      if (file) return (await get(this.corsUrl(file.name, item.identifier), signal)).body;
+    }
+    return null;
   }
 
   // Extra audio tracks and subtitles of the title VOB `base`, or null. They

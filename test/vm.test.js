@@ -149,3 +149,23 @@ test('a button over a title that calls a menu resumes where the title was', () =
   assert.equal(where(step), `${Domain.VTS} 1/1`);
   assert.equal(step.resumeTime, 42);
 });
+
+test("a button's time is not carried into another title it jumps to", () => {
+  const d = disc();
+  // Title 2 calls the menu from its pre commands (resume cell 0: "this cell").
+  d.vts[1] = parseVTS(
+    buildVTS({
+      pgcs: [
+        { bytes: buildPGC({ cells: [{ time: 0x00010040, cellId: 1 }] }) },
+        { bytes: buildPGC({ cells: [{ time: 0x00020040, vobId: 2, cellId: 1 }], pre: ['3008000000420000'] }) },
+      ],
+    })
+  );
+  const vm = new DvdVM(d);
+  vm.start();
+  vm.activateButton(pick(1));
+  // a button over title 1, 42 s in, that jumps to title 2
+  assert.equal(where(vm.activateButton(cmd('3002000000020000'), 42)), `${Domain.VMGM} 1/1`);
+  assert.equal(vm.rsm.pgcN, 2);
+  assert.equal(vm.rsm.time, null);
+});
