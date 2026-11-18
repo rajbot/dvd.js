@@ -147,6 +147,14 @@ To make the mp4s for a disc (needs ffmpeg, and 7z or bsdtar for images):
 
     node tools/make-derivatives.mjs <disc image | VIDEO_TS dir> <out dir>
 
+`tools/make_derivatives.py` is the same tool in Python (3.8 or later,
+standard library only), for running where Node isn't, such as a deriver. It
+takes the same arguments and writes the same files: its ffmpeg commands and
+its output are identical to the Node version's, which `npm test` checks on a
+small made-up disc.
+
+    python3 tools/make_derivatives.py <disc image | VIDEO_TS dir> <out dir>
+
 To play a disc from local files instead of archive.org:
 
     index.html?videots=<url of a VIDEO_TS dir>&mp4=<url of the mp4 dir>
@@ -162,6 +170,7 @@ To play a disc from local files instead of archive.org:
 | `src/archive.js` | archive.org item access (and plain URLs for local use) |
 | `src/player.js` | The player UI |
 | `tools/make-derivatives.mjs` | Makes the per-VOB mp4s with ffmpeg, and the audio, subtitle and button files |
+| `tools/make_derivatives.py` | The same, in Python |
 
 ## What archive.org allows from another origin
 

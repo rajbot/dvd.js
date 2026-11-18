@@ -6,7 +6,7 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "test": "node --test test/",
+    "test": "node --test test/ && python3 -m unittest discover -s test",
     "serve": "node tools/serve.mjs"
   }
 }
